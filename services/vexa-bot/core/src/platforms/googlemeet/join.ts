@@ -25,10 +25,12 @@ export async function joinGoogleMeeting(
 
       win.__vexaRemoteAudioHookInstalled = true;
       win.__vexaInjectedAudioElements = win.__vexaInjectedAudioElements || [];
+      win.__vexaPeerConnections = win.__vexaPeerConnections || [];
       const OriginalPC = RTCPeerConnection;
 
       function wrapPeerConnection(this: any, ...args: any[]) {
         const pc: RTCPeerConnection = new (OriginalPC as any)(...args);
+        win.__vexaPeerConnections.push(pc);
 
         const handleTrack = (event: RTCTrackEvent) => {
           try {
@@ -104,8 +106,8 @@ export async function joinGoogleMeeting(
   await page.bringToFront();
 
   // Take screenshot after navigation
-  await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-0-after-navigation.png', fullPage: true });
-  log("📸 Screenshot taken: After navigation to meeting URL");
+  try { await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-0-after-navigation.png', fullPage: true }); } catch {}
+  log("Screenshot: After navigation to meeting URL");
   
   // --- Call joining callback to notify bot-manager that bot is joining ---
   try {
@@ -129,8 +131,8 @@ export async function joinGoogleMeeting(
   log("Name input field found.");
   
   // Take screenshot after finding name field
-  await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-0-name-field-found.png', fullPage: true });
-  log("📸 Screenshot taken: Name input field found");
+  try { await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-0-name-field-found.png', fullPage: true }); } catch {}
+  log("Screenshot: Name input field found");
 
   await page.waitForTimeout(randomDelay(1000));
   await page.fill(nameFieldSelector, botName);
@@ -173,6 +175,6 @@ export async function joinGoogleMeeting(
   log(`${botName} joined the Google Meet Meeting.`);
   
   // Take screenshot after clicking "Ask to join"
-  await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-0-after-ask-to-join.png', fullPage: true });
-  log("📸 Screenshot taken: After clicking 'Ask to join'");
+  try { await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-0-after-ask-to-join.png', fullPage: true }); } catch {}
+  log("Screenshot: After clicking 'Ask to join'");
 }

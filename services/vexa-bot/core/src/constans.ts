@@ -30,10 +30,21 @@ const baseBrowserArgs = [
  *   Omit the fake-audio-capture flag so Chromium reads from PulseAudio default
  *   source (virtual_mic remap of tts_sink.monitor), allowing TTS audio into meeting.
  */
-export function getBrowserArgs(voiceAgentEnabled: boolean = false): string[] {
+export function getBrowserArgs(voiceAgentEnabled: boolean = false, bridgeMode: boolean = false): string[] {
   let args = [...baseBrowserArgs];
 
-  if (voiceAgentEnabled) {
+  if (bridgeMode) {
+    // Bridge mode (desktop): mute all Chrome audio output to prevent echo.
+    // Audio capture bypasses DOM elements and reads directly from WebRTC
+    // MediaStreams via AudioContext, so --mute-audio is safe here.
+    args.push("--mute-audio");
+    args.push("--use-file-for-fake-audio-capture=/dev/null");
+    // Use completely fake media devices so Chrome never touches the real
+    // microphone. This prevents double-capture when user and bot are on the
+    // same machine. TTS is injected via WebRTC replaceTrack, not PulseAudio,
+    // so fake devices are safe in bridge mode.
+    args.push("--use-fake-device-for-media-stream");
+  } else if (voiceAgentEnabled) {
     // Audio: Omit --use-file-for-fake-audio-capture so Chromium reads from
     // PulseAudio default source (virtual_mic → tts_sink.monitor).
     // This allows TTS audio played to tts_sink to enter the meeting as mic input.

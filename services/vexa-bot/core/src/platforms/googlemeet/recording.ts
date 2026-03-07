@@ -3,7 +3,7 @@ import { log } from "../../utils";
 import { BotConfig } from "../../types";
 import { WhisperLiveService } from "../../services/whisperlive";
 import { RecordingService } from "../../services/recording";
-import { setActiveRecordingService } from "../../index";
+import { setActiveRecordingService, isBridgeMode, getBridgeClient } from "../../index";
 import { ensureBrowserUtils } from "../../utils/injection";
 import {
   googleParticipantSelectors,
@@ -17,10 +17,25 @@ import {
 
 // Modified to use new services - Google Meet recording functionality
 export async function startGoogleRecording(page: Page, botConfig: BotConfig): Promise<void> {
+  const inBridgeMode = isBridgeMode();
   const transcriptionEnabled = botConfig.transcribeEnabled !== false;
   let whisperLiveService: WhisperLiveService | null = null;
   let whisperLiveUrl: string | null = null;
-  if (transcriptionEnabled) {
+
+  if (inBridgeMode) {
+    // Bridge mode: audio goes to Rust core via BridgeClient, skip WhisperLive entirely
+    log("[Google Recording] Bridge mode active — audio will be sent to Rust core, skipping WhisperLive.");
+
+    // Expose a Node.js function that the browser context can call to send audio to the bridge
+    await page.exposeFunction("__vexaBridgeSendAudio", (float32Array: number[]) => {
+      const bridge = getBridgeClient();
+      if (bridge) {
+        // Convert the plain number array back to Float32Array
+        const f32 = new Float32Array(float32Array);
+        bridge.sendAudio(f32);
+      }
+    });
+  } else if (transcriptionEnabled) {
     whisperLiveService = new WhisperLiveService({
       whisperLiveUrl: process.env.WHISPER_LIVE_URL
     });
@@ -80,6 +95,7 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
     async (pageArgs: {
       botConfigData: BotConfig;
       whisperUrlForBrowser: string | null;
+      bridgeModeActive: boolean;
       selectors: {
         participantSelectors: string[];
         speakingClasses: string[];
@@ -90,7 +106,7 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
         peopleButtonSelectors: string[];
       };
     }) => {
-      const { botConfigData, whisperUrlForBrowser, selectors } = pageArgs;
+      const { botConfigData, whisperUrlForBrowser, bridgeModeActive, selectors } = pageArgs;
       const transcriptionEnabled = (botConfigData as any)?.transcribeEnabled !== false;
 
       // Use browser utility classes from the global bundle
@@ -126,7 +142,8 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
       });
 
       // Use BrowserWhisperLiveService with stubborn mode to enable reconnection on Google Meet
-      const whisperLiveService = transcriptionEnabled
+      // In bridge mode, skip WhisperLive — audio goes to Rust core via exposed function
+      const whisperLiveService = (transcriptionEnabled && !bridgeModeActive)
         ? new browserUtils.BrowserWhisperLiveService({
             whisperLiveUrl: whisperUrlForBrowser as string
           }, true) // Enable stubborn mode for Google Meet
@@ -298,17 +315,168 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
       } catch {}
 
 
+      // ============================================================
+      // BRIDGE MODE: Direct WebRTC audio capture (bypasses BrowserAudioService)
+      // This works with --mute-audio because we read from MediaStreams directly,
+      // not from DOM audio element playback.
+      // ============================================================
+      if (bridgeModeActive) {
+        await new Promise<void>((resolve, reject) => {
+          (async () => {
+            const TARGET_SAMPLE_RATE = 16000;
+            const BUFFER_SIZE = 4096;
+            (window as any).logBot("[Bridge Audio] Starting direct WebRTC audio capture...");
+
+            // Wait for WebRTC streams to appear (set by RTCPeerConnection hook in join.ts)
+            let streams: MediaStream[] = [];
+            for (let attempt = 0; attempt < 30; attempt++) {
+              streams = ((window as any).__vexaCapturedRemoteAudioStreams || []) as MediaStream[];
+              if (streams.length > 0) break;
+              (window as any).logBot(`[Bridge Audio] Waiting for WebRTC streams... attempt ${attempt + 1}/30`);
+              await new Promise(r => setTimeout(r, 2000));
+            }
+
+            if (streams.length === 0) {
+              (window as any).logBot("[Bridge Audio] WARNING: No WebRTC audio streams found after 60s. Continuing in degraded mode.");
+              resolve();
+              return;
+            }
+
+            (window as any).logBot(`[Bridge Audio] Found ${streams.length} WebRTC audio stream(s). Setting up capture...`);
+
+            // Create AudioContext at browser's native sample rate
+            const audioCtx = new AudioContext();
+            const nativeSR = audioCtx.sampleRate;
+            (window as any).logBot(`[Bridge Audio] AudioContext created (native SR: ${nativeSR}Hz, target: ${TARGET_SAMPLE_RATE}Hz)`);
+
+            // Mix all remote streams into a single destination
+            const merger = audioCtx.createChannelMerger(streams.length);
+            for (let i = 0; i < streams.length; i++) {
+              try {
+                const source = audioCtx.createMediaStreamSource(streams[i]);
+                source.connect(merger, 0, Math.min(i, merger.numberOfInputs - 1));
+              } catch (err: any) {
+                (window as any).logBot(`[Bridge Audio] Failed to connect stream ${i}: ${err?.message}`);
+              }
+            }
+
+            // Use ScriptProcessorNode to capture raw PCM and resample to 16kHz
+            const scriptNode = audioCtx.createScriptProcessor(BUFFER_SIZE, 1, 1);
+            const ratio = nativeSR / TARGET_SAMPLE_RATE;
+            let chunkCount = 0;
+
+            scriptNode.onaudioprocess = (e: AudioProcessingEvent) => {
+              const inputData = e.inputBuffer.getChannelData(0);
+
+              // Simple linear resampling from native rate to 16kHz
+              const outputLength = Math.floor(inputData.length / ratio);
+              const output = new Float32Array(outputLength);
+              for (let i = 0; i < outputLength; i++) {
+                const srcIdx = i * ratio;
+                const idx = Math.floor(srcIdx);
+                const frac = srcIdx - idx;
+                const s0 = inputData[idx] || 0;
+                const s1 = inputData[Math.min(idx + 1, inputData.length - 1)] || 0;
+                output[i] = s0 + frac * (s1 - s0);
+              }
+
+              // Send to bridge via exposed Node.js function
+              const bridgeFn = (window as any).__vexaBridgeSendAudio;
+              if (typeof bridgeFn === 'function') {
+                bridgeFn(Array.from(output));
+              }
+
+              chunkCount++;
+              if (chunkCount % 100 === 0) {
+                // Log every ~6 seconds at 16kHz
+                let rms = 0;
+                for (let i = 0; i < output.length; i++) rms += output[i] * output[i];
+                rms = Math.sqrt(rms / output.length);
+                (window as any).logBot(`[Bridge Audio] Sent ${chunkCount} chunks, last RMS=${rms.toFixed(6)}`);
+              }
+            };
+
+            merger.connect(scriptNode);
+            scriptNode.connect(audioCtx.destination);
+
+            // Watch for new streams appearing later (new participants joining)
+            let knownStreamCount = streams.length;
+            setInterval(() => {
+              const currentStreams = ((window as any).__vexaCapturedRemoteAudioStreams || []) as MediaStream[];
+              if (currentStreams.length > knownStreamCount) {
+                for (let i = knownStreamCount; i < currentStreams.length; i++) {
+                  try {
+                    const source = audioCtx.createMediaStreamSource(currentStreams[i]);
+                    source.connect(merger, 0, 0);
+                    (window as any).logBot(`[Bridge Audio] Connected new stream ${i}`);
+                  } catch (err: any) {
+                    (window as any).logBot(`[Bridge Audio] Failed to connect new stream ${i}: ${err?.message}`);
+                  }
+                }
+                knownStreamCount = currentStreams.length;
+              }
+            }, 5000);
+
+            (window as any).__vexaBridgeAudioCtx = audioCtx;
+            (window as any).__vexaBridgeScriptNode = scriptNode;
+            (window as any).logBot("[Bridge Audio] Direct WebRTC capture pipeline active.");
+
+            // === Meeting monitoring loop (keeps promise pending until meeting ends) ===
+            const leaveCfg = ((botConfigData as any)?.automaticLeave) || {};
+            const startupAloneTimeout = Number(leaveCfg.noOneJoinedTimeout ?? 300);
+            const everyoneLeftTimeout = Number(leaveCfg.everyoneLeftTimeout ?? 60);
+            let aloneSeconds = 0;
+            let hasHadOthers = false;
+
+            const monitorInterval = setInterval(async () => {
+              // Count participants by looking for participant elements
+              const participantEls = document.querySelectorAll('[data-participant-id]');
+              const count = participantEls.length;
+
+              if (count > 1) {
+                hasHadOthers = true;
+                aloneSeconds = 0;
+              } else {
+                aloneSeconds++;
+                const timeout = hasHadOthers ? everyoneLeftTimeout : startupAloneTimeout;
+                if (aloneSeconds % 30 === 0) {
+                  (window as any).logBot(`[Bridge Monitor] Bot alone for ${aloneSeconds}s (timeout: ${timeout}s, hadOthers: ${hasHadOthers})`);
+                }
+                if (aloneSeconds >= timeout) {
+                  clearInterval(monitorInterval);
+                  audioCtx.close().catch(() => {});
+                  const reason = hasHadOthers ? 'GOOGLE_MEET_BOT_LEFT_ALONE_TIMEOUT' : 'GOOGLE_MEET_BOT_STARTUP_ALONE_TIMEOUT';
+                  (window as any).logBot(`[Bridge Monitor] ${reason} — leaving meeting.`);
+                  reject(new Error(reason));
+                }
+              }
+            }, 1000);
+
+            // Also listen for page unload
+            window.addEventListener("beforeunload", () => {
+              clearInterval(monitorInterval);
+              audioCtx.close().catch(() => {});
+              resolve();
+            });
+          })();
+        });
+      }
+
+      // ============================================================
+      // STANDARD MODE: BrowserAudioService-based capture
+      // ============================================================
+      if (!bridgeModeActive) {
       await new Promise<void>((resolve, reject) => {
         try {
           (window as any).logBot("Starting Google Meet recording process with new services.");
-          
+
           // Wait a bit for media elements to initialize after admission, then start the chain
           (async () => {
             let degradedNoMedia = false;
             // Wait 2 seconds for media elements to initialize after admission
             (window as any).logBot("Waiting 2 seconds for media elements to initialize after admission...");
             await new Promise(resolve => setTimeout(resolve, 2000));
-            
+
             // Find and create combined audio stream with enhanced retry logic
             // Use 10 retries with 3s delay = 30s total wait time
             audioService.findMediaElements(10, 3000).then(async (mediaElements: HTMLMediaElement[]) => {
@@ -397,7 +565,12 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
             });
 
             // Initialize WhisperLive WebSocket connection with simple reconnection wrapper
+            // (skipped entirely in bridge mode — audio goes to Rust core)
             const connectWhisper = async () => {
+              if (bridgeModeActive) {
+                (window as any).logBot("[Bridge] Bridge mode active — skipping WhisperLive WebSocket connection.");
+                return;
+              }
               if (!transcriptionEnabled || !whisperLiveService) {
                 return;
               }
@@ -859,6 +1032,7 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
           return reject(new Error("[Google Meet BOT Error] " + error.message));
         }
       });
+      } // end if (!bridgeModeActive)
 
       // Define reconfiguration hook to update language/task and reconnect
       (window as any).triggerWebSocketReconfigure = async (lang: string | null, task: string | null) => {
@@ -885,9 +1059,10 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
         }
       };
     },
-    { 
-      botConfigData: botConfig, 
+    {
+      botConfigData: botConfig,
       whisperUrlForBrowser: whisperLiveUrl,
+      bridgeModeActive: inBridgeMode,
       selectors: {
         participantSelectors: googleParticipantSelectors,
         speakingClasses: googleSpeakingClassNames,

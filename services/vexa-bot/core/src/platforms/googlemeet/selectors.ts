@@ -255,25 +255,40 @@ export const googleJoinButtonSelectors: string[] = [
   '//button[.//span[text()="Ask to join"]]',
   'button:has-text("Ask to join")',
   'button:has-text("Join now")',
-  'button:has-text("Join")'
+  'button:has-text("Join")',
+  // Ukrainian
+  '//button[.//span[text()="Попросити приєднатися"]]',
+  'button:has-text("Попросити приєднатися")',
+  'button:has-text("Приєднатися")',
+  'button:has-text("Приєднатись")',
 ];
 
 export const googleCameraButtonSelectors: string[] = [
   '[aria-label*="Turn off camera"]',
   'button[aria-label*="Turn off camera"]',
-  'button[aria-label*="Turn on camera"]'
+  'button[aria-label*="Turn on camera"]',
+  // Ukrainian
+  'button[aria-label*="Вимкнути камеру"]',
+  'button[aria-label*="Увімкнути камеру"]',
 ];
 
 export const googleMicrophoneButtonSelectors: string[] = [
   '[aria-label*="Turn off microphone"]',
   'button[aria-label*="Turn off microphone"]',
-  'button[aria-label*="Turn on microphone"]'
+  'button[aria-label*="Turn on microphone"]',
+  // Ukrainian
+  'button[aria-label*="Вимкнути мікрофон"]',
+  'button[aria-label*="Увімкнути мікрофон"]',
 ];
 
 export const googleNameInputSelectors: string[] = [
   'input[type="text"][aria-label="Your name"]',
   'input[placeholder*="name"]',
-  'input[placeholder*="Name"]'
+  'input[placeholder*="Name"]',
+  // Ukrainian
+  'input[type="text"][aria-label="Ваше ім\'я"]',
+  'input[placeholder*="ім\'я"]',
+  'input[placeholder*="Ім\'я"]',
 ];
 
 // Google Meet meeting container selectors
@@ -294,10 +309,15 @@ export const googleParticipantIdSelectors: string[] = [
 export const googleLeaveSelectors: string[] = [
   // WORKING SELECTORS FIRST - Google Meet primary leave button
   'button[aria-label="Leave call"]', // ✅ Primary Google Meet leave button
-  
+
   // Alternative leave patterns
   'button[aria-label*="Leave"]',
   'button[aria-label*="leave"]',
+  // Ukrainian
+  'button[aria-label*="Вийти"]',
+  'button[aria-label*="Залишити"]',
+  'button:has-text("Вийти з дзвінка")',
+  'button:has-text("Залишити зустріч")',
   '[role="toolbar"] button[aria-label*="Leave"]',
   
   // End meeting alternatives

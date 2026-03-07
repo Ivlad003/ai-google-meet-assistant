@@ -93,8 +93,8 @@ export async function waitForGoogleMeetingAdmission(
     log("Waiting for Google Meet meeting admission...");
     
     // Take screenshot at start of admission check
-    await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-1-admission-start.png', fullPage: true });
-    log("📸 Screenshot taken: Start of admission check");
+    try { await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-1-admission-start.png', fullPage: true }); } catch {}
+    log("Screenshot: Start of admission check");
     
     // FIRST: Check if bot is already admitted (no waiting room needed)
     log("Checking if bot is already admitted to the Google Meet meeting...");
@@ -109,8 +109,8 @@ export async function waitForGoogleMeetingAdmission(
       log(`Found Google Meet admission indicator: visible meeting controls - Bot is already admitted to the meeting!`);
       
       // Take screenshot when already admitted
-      await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-2-admitted.png', fullPage: true });
-      log("📸 Screenshot taken: Bot confirmed already admitted to meeting");
+      try { await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-2-admitted.png', fullPage: true }); } catch {}
+      log("Screenshot: Bot confirmed already admitted to meeting");
       
       // CRITICAL FIX: When bot is immediately admitted, skip awaiting_admission callback
       // The bot should go directly from "joining" -> "active", not "joining" -> "awaiting_admission" -> "active"
@@ -133,8 +133,8 @@ export async function waitForGoogleMeetingAdmission(
       log(`Found Google Meet waiting room indicator - Bot is still in waiting room`);
       
       // Take screenshot when waiting room indicator found
-      await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-4-waiting-room.png', fullPage: true });
-      log("📸 Screenshot taken: Bot confirmed in waiting room");
+      try { await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-4-waiting-room.png', fullPage: true }); } catch {}
+      log("Screenshot: Bot confirmed in waiting room");
       
       // CRITICAL: Wait a moment to ensure "joining" callback is processed before sending "awaiting_admission"
       // This prevents race condition where awaiting_admission arrives before joining is processed
@@ -274,8 +274,8 @@ export async function waitForGoogleMeetingAdmission(
     const finalAdmissionFound = await checkForGoogleAdmissionIndicators(page);
     const finalLobbyVisible = await checkForWaitingRoomIndicators(page);
     if (finalAdmissionFound && !finalLobbyVisible) {
-      await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-2-admitted.png', fullPage: true });
-      log("📸 Screenshot taken: Bot confirmed admitted to meeting");
+      try { await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-2-admitted.png', fullPage: true }); } catch {}
+      log("Screenshot: Bot confirmed admitted to meeting");
       log("Successfully admitted to the Google Meet meeting");
       return true;
     }
@@ -287,8 +287,8 @@ export async function waitForGoogleMeetingAdmission(
       throw new Error("Bot admission was rejected by meeting admin");
     }
 
-    await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-3-no-indicators.png', fullPage: true });
-    log("📸 Screenshot taken: No meeting indicators found after timeout");
+    try { await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-3-no-indicators.png', fullPage: true }); } catch {}
+    log("Screenshot: No meeting indicators found after timeout");
     throw new Error("Bot failed to join the Google Meet meeting - no meeting indicators found within timeout");
     
   } catch (error: any) {

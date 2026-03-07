@@ -9,7 +9,7 @@ minio-data/
 # Environment
 .env
 
-# Old artifacts
+# Artifacts
 *.png
 models/
 repomix-output.xml
@@ -17,6 +17,16 @@ repomix-output.xml
 # Shared data (API keys, secrets)
 data/shared/
 
-# Go
-/bot
-/bin/
+# Rust build artifacts
+jarvis/target/
+
+# Node modules
+node_modules/
+
+# TypeScript build output
+services/vexa-bot/core/dist/
+services/vexa-bot/build/
+
+# Python
+__pycache__/
+*.pyc

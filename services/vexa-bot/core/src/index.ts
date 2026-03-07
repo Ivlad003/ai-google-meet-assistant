@@ -15,6 +15,7 @@ import { ScreenContentService, getVirtualCameraInitScript } from "./services/scr
 import { ScreenShareService } from "./services/screen-share"; // kept for Teams; unused for Google Meet camera-feed approach
 import { createClient, RedisClientType } from 'redis';
 import { Page, Browser } from 'playwright-core';
+import { BridgeClient } from './services/bridge-client';
 // HTTP imports removed - using unified callback service instead
 
 // Module-level variables to store current configuration
@@ -33,6 +34,12 @@ let isShuttingDown = false;
 // --- ADDED: Redis subscriber client ---
 let redisSubscriber: RedisClientType | null = null;
 // -----------------------------------
+
+// --- Bridge mode (desktop/Rust core) ---
+let bridgeClient: BridgeClient | null = null;
+export function getBridgeClient(): BridgeClient | null { return bridgeClient; }
+export function isBridgeMode(): boolean { return bridgeClient !== null; }
+// ----------------------------------------
 
 // --- ADDED: Browser instance ---
 let browserInstance: Browser | null = null;
@@ -672,6 +679,13 @@ async function performGracefulLeave(
  * Publish a voice agent event to Redis.
  */
 async function publishVoiceEvent(event: string, data: any = {}): Promise<void> {
+  // Bridge mode: send events via WebSocket to Rust core
+  if (bridgeClient) {
+    bridgeClient.sendEvent(event, { ...data, ts: new Date().toISOString() });
+    return;
+  }
+
+  // Redis mode (original)
   if (!redisPublisher || !currentBotConfig) return;
   const meetingId = currentBotConfig.meeting_id;
   try {
@@ -885,7 +899,7 @@ async function initChatService(
     botConfig.platform,
     botConfig.meeting_id,
     botConfig.botName,
-    botConfig.redisUrl,
+    isBridgeMode() ? '' : botConfig.redisUrl,
     chatTranscriptConfig
   );
   log('[Chat] Chat service ready');
@@ -913,8 +927,8 @@ async function initVoiceAgentServices(
   microphoneService = new MicrophoneService(page, botConfig.platform);
   log('[VoiceAgent] Microphone service ready');
 
-  // Redis publisher for events
-  if (botConfig.redisUrl) {
+  // Redis publisher for events (skip in bridge mode — events go via WebSocket)
+  if (!isBridgeMode() && botConfig.redisUrl) {
     try {
       redisPublisher = createClient({ url: botConfig.redisUrl }) as RedisClientType;
       redisPublisher.on('error', (err) => log(`[VoiceAgent] Redis publisher error: ${err}`));
@@ -923,6 +937,8 @@ async function initVoiceAgentServices(
     } catch (err: any) {
       log(`[VoiceAgent] Redis publisher failed: ${err.message}`);
     }
+  } else if (isBridgeMode()) {
+    log('[VoiceAgent] Bridge mode active — events will be sent via WebSocket');
   }
 
   await publishVoiceEvent('voice_agent.initialized');
@@ -959,41 +975,172 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     return;
   }
 
-  // --- ADDED: Redis Client Setup and Subscription ---
-  if (currentRedisUrl && meetingId !== undefined && meetingId !== null) {
+  // --- Command channel setup: Bridge mode (desktop) OR Redis (Docker) ---
+  const bridgeUrl = process.env.BRIDGE_URL;
+  if (bridgeUrl) {
+    // ===== Bridge mode: connect to local Rust WebSocket server =====
+    log(`[Bridge] BRIDGE_URL set: ${bridgeUrl}. Using bridge mode (no Redis).`);
+    bridgeClient = new BridgeClient(bridgeUrl);
+
+    try {
+      await bridgeClient.connect();
+      log('[Bridge] Connected to Rust core successfully.');
+    } catch (err: any) {
+      log(`[Bridge] Initial connection failed: ${err.message}. Will keep retrying in background.`);
+      // BridgeClient auto-reconnects, so we can proceed.
+    }
+
+    // Route commands from bridge the same way as Redis handleRedisMessage
+    bridgeClient.onCommandReceived((action: string, data: any) => {
+      // Construct a message string matching the Redis command format
+      const message = JSON.stringify(data);
+      const channel = `bridge:commands`;
+      log(`[Bridge] Command received: action=${action}`);
+      handleRedisMessage(message, channel, page).catch((err: any) => {
+        log(`[Bridge] Error handling command: ${err.message}`);
+      });
+    });
+
+    // Handle speak commands with pre-rendered audio from Rust TTS
+    bridgeClient.onSpeakReceived(async (audioBase64: string) => {
+      log('[Bridge] Received speak audio from Rust core');
+      try {
+        // Unmute mic before speaking
+        if (microphoneService) {
+          await microphoneService.unmute();
+          await new Promise((r) => setTimeout(r, 300));
+        }
+
+        await publishVoiceEvent('speak.started', { source: 'bridge' });
+
+        // In bridge/desktop mode, inject audio directly into WebRTC via browser
+        // This avoids needing PulseAudio (paplay) which doesn't exist on macOS
+        if (page) {
+          const played = await page.evaluate(async (b64: string) => {
+            try {
+              // Decode base64 WAV to ArrayBuffer
+              const binary = atob(b64);
+              const bytes = new Uint8Array(binary.length);
+              for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+              const arrayBuffer = bytes.buffer;
+
+              // Decode audio
+              const audioCtx = new AudioContext({ sampleRate: 24000 });
+              const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+              // Create a MediaStream destination to feed into WebRTC
+              const dest = audioCtx.createMediaStreamDestination();
+              const source = audioCtx.createBufferSource();
+              source.buffer = audioBuffer;
+              source.connect(dest);
+
+              // Replace the audio track on all RTCPeerConnections with our TTS audio
+              const pcs = (window as any).__vexaPeerConnections || [];
+              let replaced = 0;
+              const ttsTrack = dest.stream.getAudioTracks()[0];
+              for (const pc of pcs) {
+                try {
+                  const senders = pc.getSenders();
+                  for (const sender of senders) {
+                    if (sender.track?.kind === 'audio' || (!sender.track && sender.dtmf === undefined)) {
+                      // Save original track to restore later
+                      if (!sender._originalTrack) sender._originalTrack = sender.track;
+                      await sender.replaceTrack(ttsTrack);
+                      replaced++;
+                      break; // One audio sender per PC is enough
+                    }
+                  }
+                } catch (e) { /* skip this PC */ }
+              }
+
+              // Play the audio
+              source.start(0);
+
+              // Wait for playback to finish
+              await new Promise<void>((resolve) => {
+                source.onended = () => resolve();
+                // Fallback timeout
+                setTimeout(resolve, (audioBuffer.duration + 1) * 1000);
+              });
+
+              // Restore original tracks
+              for (const pc of pcs) {
+                try {
+                  const senders = pc.getSenders();
+                  for (const sender of senders) {
+                    if (sender._originalTrack) {
+                      await sender.replaceTrack(sender._originalTrack);
+                      delete sender._originalTrack;
+                      break;
+                    }
+                  }
+                } catch (e) { /* skip */ }
+              }
+
+              await audioCtx.close();
+              return { ok: true, replaced, duration: audioBuffer.duration };
+            } catch (e: any) {
+              return { ok: false, error: e.message };
+            }
+          }, audioBase64);
+
+          if (played.ok) {
+            log(`[Bridge] TTS audio played via WebRTC (replaced ${played.replaced} senders, ${played.duration?.toFixed(1)}s)`);
+          } else {
+            log(`[Bridge] WebRTC TTS playback failed: ${played.error}`);
+          }
+        } else {
+          log('[Bridge] No page available for TTS playback');
+        }
+
+        await publishVoiceEvent('speak.completed');
+      } catch (err: any) {
+        log(`[Bridge] Speak audio playback failed: ${err.message}`);
+        await publishVoiceEvent('speak.error', { message: err.message });
+      }
+
+      // Auto-mute after speech
+      if (microphoneService) {
+        microphoneService.scheduleAutoMute(2000);
+      }
+    });
+
+    // Send initial bot info event
+    bridgeClient.sendEvent('bot.started', {
+      meetingUrl: botConfig.meetingUrl,
+      platform: botConfig.platform,
+      botName: botConfig.botName,
+      meetingId: meetingId,
+    });
+
+  } else if (currentRedisUrl && meetingId !== undefined && meetingId !== null) {
+    // ===== Redis mode (original Docker behavior) =====
     log("Setting up Redis subscriber...");
     try {
       redisSubscriber = createClient({ url: currentRedisUrl });
 
       redisSubscriber.on('error', (err) => log(`Redis Client Error: ${err}`));
-      // ++ ADDED: Log connection events ++
       redisSubscriber.on('connect', () => log('[DEBUG] Redis client connecting...'));
       redisSubscriber.on('ready', () => log('[DEBUG] Redis client ready.'));
       redisSubscriber.on('reconnecting', () => log('[DEBUG] Redis client reconnecting...'));
       redisSubscriber.on('end', () => log('[DEBUG] Redis client connection ended.'));
-      // ++++++++++++++++++++++++++++++++++
 
       await redisSubscriber.connect();
       log(`Connected to Redis at ${currentRedisUrl}`);
 
       const commandChannel = `bot_commands:meeting:${meetingId}`;
-      // Pass the page object when subscribing
-      // ++ MODIFIED: Add logging inside subscribe callback ++
       await redisSubscriber.subscribe(commandChannel, (message, channel) => {
-          log(`[DEBUG] Redis subscribe callback fired for channel ${channel}.`); // Log before handling
+          log(`[DEBUG] Redis subscribe callback fired for channel ${channel}.`);
           handleRedisMessage(message, channel, page)
-      }); 
-      // ++++++++++++++++++++++++++++++++++++++++++++++++
+      });
       log(`Subscribed to Redis channel: ${commandChannel}`);
 
     } catch (err) {
       log(`*** Failed to connect or subscribe to Redis: ${err} ***`);
-      // Decide how to handle this - exit? proceed without command support?
-      // For now, log the error and proceed without Redis.
-      redisSubscriber = null; // Ensure client is null if setup failed
+      redisSubscriber = null;
     }
   } else {
-    log("Redis URL or meeting_id missing, skipping Redis setup.");
+    log("Redis URL or meeting_id missing, and no BRIDGE_URL set. Skipping command channel setup.");
   }
   // -------------------------------------------------
 
@@ -1062,10 +1209,13 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     stealthPlugin.enabledEvasions.delete("media.codecs");
     chromium.use(stealthPlugin);
 
+    const headless = process.env.HEADLESS === 'true' || process.env.HEADLESS === '1';
+    const inBridgeMode = !!process.env.BRIDGE_URL;
     browserInstance = await chromium.launch({
-      headless: false,
-      args: getBrowserArgs(!!botConfig.voiceAgentEnabled),
+      headless,
+      args: getBrowserArgs(!!botConfig.voiceAgentEnabled, inBridgeMode),
     });
+    log(`Browser launched in ${headless ? 'headless' : 'headed'} mode${inBridgeMode ? ' (bridge/mute-audio)' : ''}`);
 
     // Create a new page with permissions and viewport for non-Teams
     const context = await browserInstance.newContext({
@@ -1076,6 +1226,15 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
         height: 720
       }
     });
+
+    // Set bridge mode flag — echo prevention is handled by --mute-audio Chrome flag
+    // Audio capture in bridge mode bypasses DOM elements entirely, reading directly
+    // from WebRTC MediaStreams via AudioContext
+    if (process.env.BRIDGE_URL) {
+      await context.addInitScript(() => {
+        (window as any).__vexaBridgeMode = true;
+      });
+    }
 
     // Inject virtual camera RTCPeerConnection patch BEFORE page loads
     // so Google Meet gets our canvas stream from the start.

@@ -1,7 +1,0 @@
-.env
-bin/
-models/*.bin
-models/*.onnx
-models/*.onnx.json
-docs/
-.git/
