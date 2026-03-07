@@ -1,0 +1,22 @@
+# Vexa model files (downloaded at build time)
+services/transcription-service/models/
+
+# Docker volumes
+postgres-data/
+redis-data/
+minio-data/
+
+# Environment
+.env
+
+# Old artifacts
+*.png
+models/
+repomix-output.xml
+
+# Shared data (API keys, secrets)
+data/shared/
+
+# Go
+/bot
+/bin/
