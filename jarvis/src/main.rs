@@ -18,59 +18,20 @@ mod tts;
 #[derive(Parser, Debug)]
 #[command(name = "jarvis", about = "AI Meeting Assistant")]
 struct Args {
-    /// OpenAI API key
-    #[arg(long, env = "OPENAI_API_KEY")]
-    openai_key: Option<String>,
-
-    /// Meeting URL (Google Meet, Teams, or Zoom)
-    #[arg(long, env = "MEET_URL")]
-    meet: Option<String>,
-
-    /// Bot display name
-    #[arg(long, env = "BOT_DISPLAY_NAME", default_value = "Jarvis")]
-    bot_name: String,
-
-    /// Transcription mode: local or cloud
-    #[arg(long, env = "TRANSCRIPTION_MODE", default_value = "cloud")]
-    transcription: String,
-
-    /// Whisper model for local transcription
-    #[arg(long, env = "WHISPER_MODEL", default_value = "small")]
-    whisper_model: String,
-
-    /// Web UI port
-    #[arg(long, env = "WEB_UI_PORT", default_value = "8080")]
-    port: u16,
-
-    /// TTS voice
-    #[arg(long, env = "TTS_VOICE", default_value = "nova")]
-    tts_voice: String,
-
-    /// OpenAI model
-    #[arg(long, env = "OPENAI_MODEL", default_value = "gpt-5.4")]
-    model: String,
-
-    /// Transcription language (ISO 639-1 code, e.g. "en", "uk", "auto")
-    #[arg(long, env = "LANGUAGE", default_value = "auto")]
-    language: String,
-
-    /// Path to JSON config file
-    #[arg(long, env = "JARVIS_CONFIG")]
-    config: Option<String>,
+    /// Path to JSON config file (required)
+    #[arg(long, env = "JARVIS_CONFIG", default_value = "jarvis.config.json")]
+    config: String,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    dotenvy::dotenv().ok();
-
     let args = Args::parse();
-    let config_file = args.config.as_ref().map(|path| {
-        config::ConfigFile::load(path).unwrap_or_else(|e| {
-            eprintln!("Warning: failed to load config file '{}': {}", path, e);
-            config::ConfigFile::default()
-        })
+    let config_file = config::ConfigFile::load(&args.config).unwrap_or_else(|e| {
+        eprintln!("Error: failed to load config '{}': {}", args.config, e);
+        eprintln!("Create one from jarvis.config.example.json");
+        std::process::exit(1);
     });
-    let cfg = config::Config::from_args(&args, config_file.as_ref());
+    let cfg = config::Config::from_file(&config_file);
 
     // Set up file logging
     let logs_dir = cfg.data_dir.join("logs");

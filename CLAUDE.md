@@ -50,15 +50,11 @@ cd jarvis && cargo build
 # Build vexa-bot TypeScript (MUST use npm run build, not just tsc)
 cd services/vexa-bot && npm run build
 
-# Run (from project root)
-./jarvis/target/debug/jarvis
-
-# With JSON config file
+# Configure (from project root)
 cp jarvis.config.example.json jarvis.config.json  # edit with your API key
-./jarvis/target/debug/jarvis --config jarvis.config.json
 
-# With env vars
-MEET_URL=https://meet.google.com/abc-defg-hij LANGUAGE=uk ./jarvis/target/debug/jarvis
+# Run (loads ./jarvis.config.json by default)
+./jarvis/target/debug/jarvis
 ```
 
 Requires: Node.js (v18+), Rust toolchain, OpenAI API key.
@@ -108,45 +104,39 @@ On shutdown, paths are printed to terminal.
 
 ## Configuration
 
-Three sources, priority: **CLI args/env vars > JSON config file > defaults**.
+All settings in `jarvis.config.json`. Loads from current directory by default.
 
 ```bash
-# Via JSON config (recommended)
-./jarvis/target/debug/jarvis --config jarvis.config.json
+# Default (loads ./jarvis.config.json)
+./jarvis/target/debug/jarvis
 
-# Via env vars
-OPENAI_API_KEY=sk-... MEET_URL=... ./jarvis/target/debug/jarvis
+# Custom path
+./jarvis/target/debug/jarvis --config /path/to/config.json
+
+# Or via env var
+JARVIS_CONFIG=/path/to/config.json ./jarvis/target/debug/jarvis
 ```
 
 See `jarvis.config.example.json` for all options.
 
-### Environment Variables / CLI Args
-
-| Variable | Default | Description |
-|---|---|---|
-| `OPENAI_API_KEY` | required | OpenAI API key |
-| `MEET_URL` | none | Meeting URL (can set via Web UI) |
-| `BOT_DISPLAY_NAME` | `Jarvis` | Bot name in meeting |
-| `LANGUAGE` | `auto` | Transcription language (en, uk, auto) |
-| `TRANSCRIPTION_MODE` | `cloud` | `cloud` (OpenAI API) or `local` (whisper-rs) |
-| `WHISPER_MODEL` | `small` | Local whisper model name |
-| `OPENAI_MODEL` | `gpt-5.4` | LLM model for responses |
-| `TTS_VOICE` | `nova` | OpenAI TTS voice |
-| `WEB_UI_PORT` | `8080` | Web UI port |
-| `JARVIS_CONFIG` | none | Path to JSON config file |
-
-### JSON Config Only Fields
-
-These are only configurable via `jarvis.config.json`:
-
-| Field | Default | Description |
-|---|---|---|
-| `intent_model` | `gpt-5` | Model for intent detection (uses reasoning_effort=minimal) |
-| `system_prompt` | built-in | Custom system prompt for the bot |
-| `intent_prompt` | built-in | Custom intent detection prompt (placeholders: `{bot_name}`, `{context}`, `{speaker}`, `{text}`) |
-| `max_response_tokens` | `150` | Max tokens in LLM response |
-| `temperature` | `0.7` | LLM temperature |
-| `bridge_port` | `9090` | Bridge WebSocket port |
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `openai_key` | **Yes** | — | OpenAI API key |
+| `meet_url` | No | — | Meeting URL (can set via Web UI) |
+| `bot_name` | No | `Jarvis` | Bot display name |
+| `language` | No | `auto` | Transcription language (en, uk, auto) |
+| `openai_model` | No | `gpt-5.4` | LLM model for responses |
+| `intent_model` | No | `gpt-5` | Intent detection model (uses reasoning_effort=minimal) |
+| `tts_voice` | No | `nova` | OpenAI TTS voice |
+| `transcription_mode` | No | `cloud` | `cloud` (OpenAI API) or `local` (whisper-rs) |
+| `whisper_model` | No | `small` | Local whisper model name |
+| `port` | No | `8080` | Web UI port |
+| `bridge_port` | No | `9090` | Bridge WebSocket port |
+| `max_response_tokens` | No | `150` | Max tokens in LLM response |
+| `temperature` | No | `0.7` | LLM temperature |
+| `system_prompt` | No | built-in | Custom system prompt |
+| `intent_prompt` | No | built-in | Custom intent prompt (`{bot_name}`, `{context}`, `{speaker}`, `{text}`) |
+| `tools` | No | `[]` | Custom tool integrations |
 
 ## Key Constraints
 

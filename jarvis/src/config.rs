@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// JSON config file structure — all fields optional, CLI/env override these
+/// JSON config file structure — all settings live here
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ConfigFile {
     pub openai_key: Option<String>,
@@ -13,7 +13,6 @@ pub struct ConfigFile {
     pub bridge_port: Option<u16>,
     pub tts_voice: Option<String>,
     pub openai_model: Option<String>,
-    pub trigger_phrase: Option<String>,
     pub language: Option<String>,
     pub intent_model: Option<String>,
     pub system_prompt: Option<String>,
@@ -67,81 +66,40 @@ pub enum TranscriptionMode {
 }
 
 impl Config {
-    /// Build config with priority: CLI args/env > JSON config file > defaults
-    pub fn from_args(args: &super::Args, config_file: Option<&ConfigFile>) -> Self {
+    /// Build config from JSON config file with sensible defaults
+    pub fn from_file(cf: &ConfigFile) -> Self {
         let data_dir = dirs_or_default();
         std::fs::create_dir_all(&data_dir).ok();
 
-        let cf = config_file.cloned().unwrap_or_default();
-
-        // CLI arg wins, then JSON config, then panic
-        let openai_key = args.openai_key.clone()
-            .or(cf.openai_key.clone())
-            .expect("OpenAI API key required: set OPENAI_API_KEY, --openai-key, or openai_key in config JSON");
-        let meet_url = args.meet.clone().or(cf.meet_url);
-        let bot_name = if args.bot_name != "Jarvis" {
-            args.bot_name.clone()
-        } else {
-            cf.bot_name.unwrap_or_else(|| args.bot_name.clone())
-        };
-        let transcription = if args.transcription != "cloud" {
-            args.transcription.clone()
-        } else {
-            cf.transcription_mode.unwrap_or_else(|| args.transcription.clone())
-        };
-        let whisper_model = if args.whisper_model != "small" {
-            args.whisper_model.clone()
-        } else {
-            cf.whisper_model.unwrap_or_else(|| args.whisper_model.clone())
-        };
-        let port = if args.port != 8080 {
-            args.port
-        } else {
-            cf.port.unwrap_or(args.port)
-        };
-        let bridge_port = cf.bridge_port.unwrap_or(9090);
-        let tts_voice = if args.tts_voice != "nova" {
-            args.tts_voice.clone()
-        } else {
-            cf.tts_voice.unwrap_or_else(|| args.tts_voice.clone())
-        };
-        let openai_model = if args.model != "gpt-5.4" {
-            args.model.clone()
-        } else {
-            cf.openai_model.unwrap_or_else(|| args.model.clone())
-        };
-        let language = if args.language != "auto" {
-            args.language.clone()
-        } else {
-            cf.language.unwrap_or_else(|| args.language.clone())
-        };
-        let intent_model = cf.intent_model.unwrap_or_else(|| "gpt-5".to_string());
-        let max_response_tokens = cf.max_response_tokens.unwrap_or(150);
-        let temperature = cf.temperature.unwrap_or(0.7);
-        let tools = cf.tools.unwrap_or_default();
+        let openai_key = cf.openai_key.clone()
+            .unwrap_or_else(|| {
+                eprintln!("Error: 'openai_key' is required in config JSON");
+                std::process::exit(1);
+            });
+        let transcription = cf.transcription_mode.clone().unwrap_or_else(|| "cloud".to_string());
 
         Self {
             openai_key,
-            meet_url,
-            bot_name,
+            meet_url: cf.meet_url.clone(),
+            bot_name: cf.bot_name.clone().unwrap_or_else(|| "Jarvis".to_string()),
             transcription_mode: match transcription.as_str() {
                 "local" => TranscriptionMode::Local,
                 _ => TranscriptionMode::Cloud,
             },
-            whisper_model,
-            port,
-            bridge_port,
-            tts_voice,
-            openai_model,
+            whisper_model: cf.whisper_model.clone().unwrap_or_else(|| "small".to_string()),
+            port: cf.port.unwrap_or(8080),
+            bridge_port: cf.bridge_port.unwrap_or(9090),
+            tts_voice: cf.tts_voice.clone().unwrap_or_else(|| "nova".to_string()),
+            openai_model: cf.openai_model.clone().unwrap_or_else(|| "gpt-5.4".to_string()),
             db_path: data_dir.join("jarvis.db"),
             data_dir,
-            language,
-            intent_model,
-            system_prompt: cf.system_prompt,
-            intent_prompt: cf.intent_prompt,
-            max_response_tokens,
-            temperature,
-            tools,
+            language: cf.language.clone().unwrap_or_else(|| "auto".to_string()),
+            intent_model: cf.intent_model.clone().unwrap_or_else(|| "gpt-5".to_string()),
+            system_prompt: cf.system_prompt.clone(),
+            intent_prompt: cf.intent_prompt.clone(),
+            max_response_tokens: cf.max_response_tokens.unwrap_or(150),
+            temperature: cf.temperature.unwrap_or(0.7),
+            tools: cf.tools.clone().unwrap_or_default(),
         }
     }
 }

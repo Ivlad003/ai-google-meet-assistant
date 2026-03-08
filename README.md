@@ -104,27 +104,10 @@ Transcript format:
 ```bash
 git clone https://github.com/aspect-build/ai_google_meet_asistant.git
 cd ai_google_meet_asistant
-```
-
-**Option A: JSON config (recommended) / JSON конфіг (рекомендовано):**
-
-```bash
 cp jarvis.config.example.json jarvis.config.json
 ```
 
-Edit `jarvis.config.json` — set your `openai_key` and `meet_url`.
-
-**Option B: Environment file / Файл оточення:**
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env`:
-
-```bash
-OPENAI_API_KEY=sk-...
-```
+Edit `jarvis.config.json` — set your `openai_key` and optionally `meet_url`.
 
 ### 2. Build / Зібрати
 
@@ -139,14 +122,13 @@ cd services/vexa-bot && npm install --ignore-scripts && npm run build && cd ../.
 ### 3. Run / Запустити
 
 ```bash
-# With JSON config
-./jarvis/target/debug/jarvis --config jarvis.config.json
-
-# Or with env vars
 ./jarvis/target/debug/jarvis
+```
 
-# Or with a meeting URL directly
-MEET_URL=https://meet.google.com/abc-defg-hij ./jarvis/target/debug/jarvis
+By default it loads `jarvis.config.json` from the current directory. To use a different path:
+
+```bash
+./jarvis/target/debug/jarvis --config /path/to/config.json
 ```
 
 Open http://localhost:8080, enter a meeting URL, and click "Launch Bot".
@@ -185,49 +167,36 @@ Talk to the bot naturally — no exact trigger phrase needed:
 
 ### Language Support / Підтримка мов
 
-```bash
-LANGUAGE=auto ./jarvis/target/debug/jarvis   # auto-detect (default)
-LANGUAGE=uk ./jarvis/target/debug/jarvis     # Ukrainian
-LANGUAGE=en ./jarvis/target/debug/jarvis     # English
+Set `language` in `jarvis.config.json`:
+
+```json
+{ "language": "uk" }
 ```
+
+Values: `"auto"` (default), `"en"`, `"uk"`.
 
 ## Configuration / Конфігурація
 
-All settings can be provided via **JSON config file**, **environment variables**, or **CLI args**.
-Priority: CLI args/env > JSON config > defaults.
+All settings are in `jarvis.config.json`. See `jarvis.config.example.json` for the full template.
 
-```bash
-# Recommended: use JSON config
-./jarvis/target/debug/jarvis --config jarvis.config.json
-```
-
-See `jarvis.config.example.json` for all available options.
-
-### Environment Variables / Змінні середовища
-
-| Variable | Required | Default | Description |
+| Field | Required | Default | Description |
 |---|---|---|---|
-| `OPENAI_API_KEY` | Yes* | — | OpenAI API key (*or set in JSON config) |
-| `MEET_URL` | No | — | Meeting URL (can set via Web UI) |
-| `BOT_DISPLAY_NAME` | No | `Jarvis` | Bot name in meeting |
-| `LANGUAGE` | No | `auto` | Transcription language: `auto`, `en`, `uk` |
-| `TRANSCRIPTION_MODE` | No | `cloud` | `cloud` (OpenAI API) or `local` (whisper-rs) |
-| `WHISPER_MODEL` | No | `small` | Local whisper model (small, medium, large) |
-| `OPENAI_MODEL` | No | `gpt-5.4` | LLM model for responses |
-| `TTS_VOICE` | No | `nova` | TTS voice (alloy, echo, fable, onyx, nova, shimmer) |
-| `WEB_UI_PORT` | No | `8080` | Web UI port |
-| `JARVIS_CONFIG` | No | — | Path to JSON config file |
-
-### JSON Config Only / Тільки в JSON конфігу
-
-| Field | Default | Description |
-|---|---|---|
-| `intent_model` | `gpt-5` | Model for intent detection (uses reasoning_effort=minimal) |
-| `system_prompt` | built-in | Custom system prompt |
-| `intent_prompt` | built-in | Custom intent prompt (`{bot_name}`, `{context}`, `{speaker}`, `{text}`) |
-| `max_response_tokens` | `150` | Max tokens in response |
-| `temperature` | `0.7` | LLM temperature |
-| `bridge_port` | `9090` | Bridge WebSocket port |
+| `openai_key` | **Yes** | — | OpenAI API key |
+| `meet_url` | No | — | Meeting URL (can set via Web UI) |
+| `bot_name` | No | `Jarvis` | Bot display name in meeting |
+| `language` | No | `auto` | Transcription language: `auto`, `en`, `uk` |
+| `openai_model` | No | `gpt-5.4` | LLM model for responses |
+| `intent_model` | No | `gpt-5` | Model for intent detection |
+| `tts_voice` | No | `nova` | TTS voice (alloy, echo, fable, onyx, nova, shimmer) |
+| `transcription_mode` | No | `cloud` | `cloud` (OpenAI API) or `local` (whisper-rs) |
+| `whisper_model` | No | `small` | Local whisper model (small, medium, large) |
+| `port` | No | `8080` | Web UI port |
+| `bridge_port` | No | `9090` | Bridge WebSocket port |
+| `max_response_tokens` | No | `150` | Max tokens in response |
+| `temperature` | No | `0.7` | LLM temperature |
+| `system_prompt` | No | built-in | Custom system prompt |
+| `intent_prompt` | No | built-in | Custom intent prompt (`{bot_name}`, `{context}`, `{speaker}`, `{text}`) |
+| `tools` | No | `[]` | Custom tool integrations (curl, claude-code) |
 
 ## Debugging / Дебаг
 
@@ -244,12 +213,12 @@ ls ~/Library/Application\ Support/jarvis/sessions/
 
 | Problem | Solution |
 |---|---|
-| Bot not joining | Check MEET_URL. Look at logs for `[vexa-bot]` errors |
+| Bot not joining | Check `meet_url` in config. Look at logs for `[vexa-bot]` errors |
 | "you you you" in transcript | Silence filter should catch this. Ensure participants are speaking |
 | Bot timeout | Click "Admit" in Google Meet lobby |
-| Bad transcription | Set `LANGUAGE=en` or `LANGUAGE=uk` instead of `auto` |
+| Bad transcription | Set `"language": "en"` or `"language": "uk"` instead of `"auto"` in config |
 | Bot can't find buttons | Google Meet UI language must match selectors. English and Ukrainian are supported |
-| OpenAI API errors | Check `OPENAI_API_KEY` is valid |
+| OpenAI API errors | Check `openai_key` in config is valid |
 | `post_join_setup_error` | Run `npm run build` (not just `tsc`) in services/vexa-bot |
 
 ## Tech Stack
