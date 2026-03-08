@@ -6,8 +6,13 @@ use std::sync::Mutex;
 struct ChatRequest {
     model: String,
     messages: Vec<ChatMessage>,
-    temperature: f32,
-    max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    max_completion_tokens: u32,
+    /// For reasoning models (gpt-5, o3, etc.): controls reasoning token usage.
+    /// "minimal" = skip reasoning, just answer. Good for simple classification.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -18,40 +23,79 @@ struct ChatMessage {
 
 #[derive(Deserialize)]
 struct ChatResponse {
+    #[serde(default)]
     choices: Vec<Choice>,
 }
 
 #[derive(Deserialize)]
 struct Choice {
-    message: ChatMessage,
+    message: ChoiceMessage,
+}
+
+#[derive(Deserialize)]
+struct ChoiceMessage {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    refusal: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ApiErrorResponse {
+    error: Option<ApiError>,
+}
+
+#[derive(Deserialize)]
+struct ApiError {
+    message: String,
 }
 
 pub struct LlmAgent {
     client: Client,
     api_key: String,
     model: String,
+    intent_model: String,
     bot_name: String,
-    trigger_phrase: String,
+    intent_prompt: Option<String>,
+    max_response_tokens: u32,
+    temperature: f32,
     history: Mutex<Vec<ChatMessage>>,
     transcript: Mutex<Vec<String>>,
 }
 
 impl LlmAgent {
-    pub fn new(api_key: &str, model: &str, bot_name: &str, trigger_phrase: &str) -> Self {
-        let system_msg = format!(
-            "You are {}, an AI meeting assistant in a Google Meet call.\n\
-             You respond when participants address you directly.\n\
-             Keep responses concise (1-3 sentences).\n\
-             IMPORTANT: Respond ONLY in English or Ukrainian. NEVER respond in Russian.",
-            bot_name
-        );
+    pub fn new(
+        api_key: &str,
+        model: &str,
+        bot_name: &str,
+        intent_model: &str,
+        system_prompt: Option<&str>,
+        intent_prompt: Option<String>,
+        max_response_tokens: u32,
+        temperature: f32,
+        tools: &[crate::tools::ToolDef],
+    ) -> Self {
+        let tools_prompt_str = crate::tools::tools_prompt(tools);
+
+        let system_msg = system_prompt.map(|s| format!("{}{}", s, tools_prompt_str)).unwrap_or_else(|| {
+            format!(
+                "You are {}, an AI meeting assistant in a Google Meet call.\n\
+                 You respond when participants address you directly.\n\
+                 Keep responses concise (1-3 sentences).\n\
+                 IMPORTANT: Respond ONLY in English or Ukrainian. NEVER respond in Russian.{}",
+                bot_name, tools_prompt_str
+            )
+        });
 
         Self {
             client: Client::new(),
             api_key: api_key.to_string(),
             model: model.to_string(),
+            intent_model: intent_model.to_string(),
             bot_name: bot_name.to_string(),
-            trigger_phrase: trigger_phrase.to_string(),
+            intent_prompt,
+            max_response_tokens,
+            temperature,
             history: Mutex::new(vec![ChatMessage {
                 role: "system".to_string(),
                 content: system_msg,
@@ -60,56 +104,100 @@ impl LlmAgent {
         }
     }
 
-    pub fn add_transcript(&self, text: &str) {
+    pub fn add_transcript(&self, speaker: &str, text: &str) {
         let mut t = self.transcript.lock().unwrap();
-        t.push(text.to_string());
+        t.push(format!("[{}]: {}", speaker, text));
         if t.len() > 50 {
             let drain = t.len() - 50;
             t.drain(..drain);
         }
     }
 
-    /// Uses GPT-4o-mini to detect if the speaker is addressing the bot.
+    /// Record the bot's own response in transcript so intent detection
+    /// can see the full conversation flow (who said what).
+    pub fn add_bot_response_to_transcript(&self, text: &str) {
+        let mut t = self.transcript.lock().unwrap();
+        t.push(format!("[{}]: {}", self.bot_name, text));
+        if t.len() > 50 {
+            let drain = t.len() - 50;
+            t.drain(..drain);
+        }
+    }
+
+    /// Add a tool execution result to conversation history so the LLM
+    /// remembers what tools did in subsequent responses.
+    pub fn add_tool_context(&self, tool_name: &str, summary: &str) {
+        let mut history = self.history.lock().unwrap();
+        history.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: format!("[Tool {} result]: {}", tool_name, summary),
+        });
+        // Apply same history limit
+        if history.len() > 41 {
+            let system = history[0].clone();
+            let keep_start = history.len() - 40;
+            let keep: Vec<ChatMessage> = history[keep_start..].to_vec();
+            *history = vec![system];
+            history.extend(keep);
+        }
+    }
+
+    /// Detect if the speaker is addressing the bot.
     /// Returns Some(question) if they are, None otherwise.
     /// Has a 5-second timeout to avoid blocking the transcription loop.
-    pub async fn should_respond(&self, text: &str) -> Option<String> {
+    pub async fn should_respond(&self, speaker: &str, text: &str) -> Option<String> {
         let trimmed = text.trim();
-        if trimmed.len() < 5 {
+        if trimmed.len() < 3 {
             return None;
         }
 
         let recent = {
             let t = self.transcript.lock().unwrap();
             let len = t.len();
-            let start = if len > 5 { len - 5 } else { 0 };
+            // Use up to 15 lines of context for better conversation understanding
+            let start = if len > 15 { len - 15 } else { 0 };
             t[start..].join("\n")
         };
 
-        let prompt = format!(
-            "You are an intent detector for a meeting bot named \"{}\".\n\
-             The trigger phrase is \"{}\" but speech recognition often misheard it \
-             (e.g. \"hey what\", \"hi buddy\", \"high board\", \"hey boss\", etc.).\n\n\
-             Given the transcript line below, determine if the speaker is addressing the bot.\n\
-             Consider:\n\
-             - Any phrase that sounds like \"{}\" (even badly transcribed)\n\
-             - Directly mentioning the bot by name\n\
-             - Asking a question clearly directed at an AI assistant\n\n\
-             Recent meeting context:\n{}\n\n\
-             New transcript line: \"{}\"\n\n\
-             Respond with EXACTLY one of:\n\
-             - \"YES: <the question they're asking>\" if they are addressing the bot\n\
-             - \"NO\" if they are not addressing the bot\n\n\
-             Examples:\n\
-             - \"Hey boss, what is 2 plus 2?\" -> YES: what is 2 plus 2?\n\
-             - \"High board, can you summarize?\" -> YES: can you summarize?\n\
-             - \"I think we should schedule a meeting\" -> NO\n\
-             - \"Bot, help me\" -> YES: help me",
-            self.bot_name, self.trigger_phrase, self.trigger_phrase, recent, trimmed
-        );
+        let prompt = if let Some(ref custom) = self.intent_prompt {
+            custom
+                .replace("{bot_name}", &self.bot_name)
+                .replace("{context}", &recent)
+                .replace("{speaker}", speaker)
+                .replace("{text}", trimmed)
+        } else {
+            format!(
+                "You are an intent detector for a meeting bot named \"{bot_name}\".\n\
+                 The bot is an AI assistant in a Google Meet call.\n\n\
+                 RULES:\n\
+                 1. Name matching — speech recognition may mishear the name. Accept:\n\
+                    - Exact: \"{bot_name}\", \"jarvis\"\n\
+                    - Ukrainian: \"джарвіс\", \"джарвис\", \"джарвіз\"\n\
+                    - Misheard: \"ві джарвіс\", \"ай джарвіс\", \"preview jones\", \"jarves\"\n\
+                    - Any phonetically similar word in any language\n\
+                 2. Follow-up detection — if the bot ({bot_name}) recently responded and \
+                    the same speaker says something short (\"yes\", \"thanks\", \"and what about X?\", \
+                    \"tell me more\"), treat it as a follow-up to the bot.\n\
+                 3. Direct commands — \"summarize the meeting\", \"what did we discuss?\" directed \
+                    at the bot (not at another person).\n\
+                 4. Normal conversation between people is NOT bot-directed.\n\
+                 5. Whisper hallucinations like \"Дякую за перегляд\" (YouTube outro) appearing \
+                    without real speech are NOT bot-directed.\n\n\
+                 CONVERSATION SO FAR:\n{context}\n\n\
+                 NEW LINE from [{speaker}]: \"{text}\"\n\n\
+                 Reply ONLY:\n\
+                 - \"YES: <extracted question or command>\" — if addressing the bot\n\
+                 - \"NO\" — if not",
+                bot_name = self.bot_name,
+                context = recent,
+                speaker = speaker,
+                text = trimmed
+            )
+        };
 
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            self.chat_once("gpt-4o-mini", &prompt, 0.0, 60),
+            self.chat_once(&self.intent_model, &prompt, None, 1000, Some("minimal")),
         )
         .await;
 
@@ -142,7 +230,7 @@ impl LlmAgent {
         }
     }
 
-    /// Respond to a question using the configured model (GPT-4o) with conversation history.
+    /// Respond to a question using the configured model with conversation history.
     pub async fn respond(&self, question: &str) -> anyhow::Result<String> {
         let recent = {
             let t = self.transcript.lock().unwrap();
@@ -165,27 +253,41 @@ impl LlmAgent {
             history.clone()
         };
 
+        // Reasoning models (gpt-5, o3, etc.) don't support temperature
+        let is_reasoning = self.model.starts_with("gpt-5") || self.model.starts_with("o1") || self.model.starts_with("o3") || self.model.starts_with("o4");
         let req = ChatRequest {
             model: self.model.clone(),
             messages,
-            temperature: 0.7,
-            max_tokens: 150,
+            temperature: if is_reasoning { None } else { Some(self.temperature) },
+            max_completion_tokens: if is_reasoning { 2000 } else { self.max_response_tokens },
+            reasoning_effort: if is_reasoning { Some("low".to_string()) } else { None },
         };
 
-        let resp: ChatResponse = self
+        let resp = self
             .client
             .post("https://api.openai.com/v1/chat/completions")
             .bearer_auth(&self.api_key)
             .json(&req)
             .send()
-            .await?
-            .json()
             .await?;
 
-        let answer = resp
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            let api_msg = serde_json::from_str::<ApiErrorResponse>(&body)
+                .ok()
+                .and_then(|r| r.error)
+                .map(|e| e.message)
+                .unwrap_or(body);
+            anyhow::bail!("OpenAI API error (HTTP {}): {}", status, api_msg);
+        }
+
+        let chat_resp: ChatResponse = resp.json().await?;
+
+        let answer = chat_resp
             .choices
             .first()
-            .map(|c| c.message.content.trim().to_string())
+            .map(|c| c.message.content.as_deref().unwrap_or("").trim().to_string())
             .unwrap_or_default();
 
         {
@@ -207,6 +309,25 @@ impl LlmAgent {
         Ok(answer)
     }
 
+    /// Summarize a tool execution result for speaking in the meeting.
+    pub async fn summarize_tool_result(
+        &self,
+        tool_name: &str,
+        success: bool,
+        output: &str,
+    ) -> anyhow::Result<String> {
+        let prompt = format!(
+            "You executed the tool \"{}\" and it {}.\n\
+             Raw output:\n{}\n\n\
+             Summarize this result in 1-2 concise sentences for speaking aloud in a meeting.\n\
+             IMPORTANT: Respond ONLY in English or Ukrainian. NEVER respond in Russian.",
+            tool_name,
+            if success { "succeeded" } else { "failed" },
+            output
+        );
+        self.chat_once(&self.model, &prompt, Some(0.3), 500, None).await
+    }
+
     /// Generate a meeting summary from the transcript.
     pub async fn summary(&self) -> anyhow::Result<String> {
         let transcript = {
@@ -219,15 +340,16 @@ impl LlmAgent {
             transcript
         );
 
-        self.chat_once(&self.model, &prompt, 0.7, 300).await
+        self.chat_once(&self.model, &prompt, Some(0.7), 1000, None).await
     }
 
     async fn chat_once(
         &self,
         model: &str,
         prompt: &str,
-        temp: f32,
+        temp: Option<f32>,
         max_tokens: u32,
+        reasoning_effort: Option<&str>,
     ) -> anyhow::Result<String> {
         let req = ChatRequest {
             model: model.to_string(),
@@ -236,23 +358,38 @@ impl LlmAgent {
                 content: prompt.to_string(),
             }],
             temperature: temp,
-            max_tokens,
+            max_completion_tokens: max_tokens,
+            reasoning_effort: reasoning_effort.map(|s| s.to_string()),
         };
 
-        let resp: ChatResponse = self
+        let resp = self
             .client
             .post("https://api.openai.com/v1/chat/completions")
             .bearer_auth(&self.api_key)
             .json(&req)
             .send()
-            .await?
-            .json()
             .await?;
 
-        Ok(resp
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            let api_msg = serde_json::from_str::<ApiErrorResponse>(&body)
+                .ok()
+                .and_then(|r| r.error)
+                .map(|e| e.message)
+                .unwrap_or_else(|| body.clone());
+            anyhow::bail!("OpenAI API error (HTTP {}): {}", status, api_msg);
+        }
+
+        tracing::debug!("chat_once response (model={}): {}", model, &body[..body.len().min(2000)]);
+
+        let chat_resp: ChatResponse = serde_json::from_str(&body)?;
+
+        Ok(chat_resp
             .choices
             .first()
-            .map(|c| c.message.content.trim().to_string())
+            .map(|c| c.message.content.as_deref().unwrap_or("").trim().to_string())
             .unwrap_or_default())
     }
 }

@@ -18,11 +18,14 @@ rust-embed = "8"
 base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 clap = { version = "4", features = ["derive", "env"] }
 dotenvy = "0.15"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
 anyhow = "1"
+hound = "3.5"
 async-trait = "0.1"
 open = "5"
+url = "2"

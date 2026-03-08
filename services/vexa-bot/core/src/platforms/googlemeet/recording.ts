@@ -26,13 +26,22 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
     // Bridge mode: audio goes to Rust core via BridgeClient, skip WhisperLive entirely
     log("[Google Recording] Bridge mode active — audio will be sent to Rust core, skipping WhisperLive.");
 
-    // Expose a Node.js function that the browser context can call to send audio to the bridge
-    await page.exposeFunction("__vexaBridgeSendAudio", (float32Array: number[]) => {
+    // Expose a Node.js function that the browser context can call to send audio to the bridge.
+    // Uses base64-encoded binary to avoid JSON serialization overhead of number arrays.
+    await page.exposeFunction("__vexaBridgeSendAudio", (base64: string) => {
       const bridge = getBridgeClient();
       if (bridge) {
-        // Convert the plain number array back to Float32Array
-        const f32 = new Float32Array(float32Array);
+        const buf = Buffer.from(base64, 'base64');
+        const f32 = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
         bridge.sendAudio(f32);
+      }
+    });
+
+    // Expose speaker event forwarding to Rust core
+    await page.exposeFunction("__vexaBridgeSpeakerEvent", (eventType: string, participantName: string, participantId: string) => {
+      const bridge = getBridgeClient();
+      if (bridge) {
+        bridge.sendEvent("speaker_activity", { event_type: eventType, participant_name: participantName, participant_id: participantId });
       }
     });
   } else if (transcriptionEnabled) {
@@ -344,12 +353,28 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
 
             (window as any).logBot(`[Bridge Audio] Found ${streams.length} WebRTC audio stream(s). Setting up capture...`);
 
-            // Create AudioContext at browser's native sample rate
-            const audioCtx = new AudioContext();
-            const nativeSR = audioCtx.sampleRate;
-            (window as any).logBot(`[Bridge Audio] AudioContext created (native SR: ${nativeSR}Hz, target: ${TARGET_SAMPLE_RATE}Hz)`);
+            // Log stream details for debugging
+            for (let i = 0; i < streams.length; i++) {
+              const tracks = streams[i].getAudioTracks();
+              const trackInfo = tracks.map((t: MediaStreamTrack) => `id=${t.id.substring(0,8)} enabled=${t.enabled} muted=${t.muted} readyState=${t.readyState}`).join(', ');
+              (window as any).logBot(`[Bridge Audio] Stream ${i}: active=${streams[i].active}, tracks=[${trackInfo}]`);
+            }
 
-            // Mix all remote streams into a single destination
+            // Force 48kHz — fake device runs at 24kHz which produces poor quality
+            // audio (RMS near 0, Whisper hallucinations). 48kHz gives proper signal.
+            const audioCtx = new AudioContext({ sampleRate: 48000 });
+            if (audioCtx.state === 'suspended') {
+              (window as any).logBot("[Bridge Audio] AudioContext is suspended, resuming...");
+              await audioCtx.resume();
+            }
+            const nativeSR = audioCtx.sampleRate;
+            (window as any).logBot(`[Bridge Audio] AudioContext created (state: ${audioCtx.state}, native SR: ${nativeSR}Hz, target: ${TARGET_SAMPLE_RATE}Hz)`);
+
+            // Gain node to boost quiet remote audio (WebRTC audio is often quiet)
+            const gainNode = audioCtx.createGain();
+            gainNode.gain.value = 2.0;
+
+            // Mix all remote streams -> gain -> capture
             const merger = audioCtx.createChannelMerger(streams.length);
             for (let i = 0; i < streams.length; i++) {
               try {
@@ -359,49 +384,110 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                 (window as any).logBot(`[Bridge Audio] Failed to connect stream ${i}: ${err?.message}`);
               }
             }
+            merger.connect(gainNode);
 
             // Use ScriptProcessorNode to capture raw PCM and resample to 16kHz
             const scriptNode = audioCtx.createScriptProcessor(BUFFER_SIZE, 1, 1);
             const ratio = nativeSR / TARGET_SAMPLE_RATE;
             let chunkCount = 0;
 
+            // Pre-compute a simple low-pass FIR filter for anti-aliasing before downsampling.
+            // Sinc-windowed (Hann) kernel, cutoff at target_rate/native_rate.
+            const FILTER_LEN = 15;
+            const filterKernel = new Float32Array(FILTER_LEN);
+            const cutoff = TARGET_SAMPLE_RATE / nativeSR;
+            const halfLen = (FILTER_LEN - 1) / 2;
+            let filterSum = 0;
+            for (let i = 0; i < FILTER_LEN; i++) {
+              const n = i - halfLen;
+              // sinc
+              const sinc = n === 0 ? 1.0 : Math.sin(Math.PI * 2 * cutoff * n) / (Math.PI * n);
+              // Hann window
+              const window_val = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (FILTER_LEN - 1)));
+              filterKernel[i] = sinc * window_val;
+              filterSum += filterKernel[i];
+            }
+            // Normalize
+            for (let i = 0; i < FILTER_LEN; i++) filterKernel[i] /= filterSum;
+
+            // Reusable base64 encoding helper (avoids JSON serialization of number arrays)
+            function float32ToBase64(arr: Float32Array): string {
+              const bytes = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
+              let binary = '';
+              const chunkSz = 0x8000;
+              for (let i = 0; i < bytes.length; i += chunkSz) {
+                binary += String.fromCharCode(...bytes.subarray(i, i + chunkSz));
+              }
+              return btoa(binary);
+            }
+
             scriptNode.onaudioprocess = (e: AudioProcessingEvent) => {
               const inputData = e.inputBuffer.getChannelData(0);
 
-              // Simple linear resampling from native rate to 16kHz
+              // Anti-alias low-pass filter + downsample from native rate to 16kHz
               const outputLength = Math.floor(inputData.length / ratio);
               const output = new Float32Array(outputLength);
               for (let i = 0; i < outputLength; i++) {
-                const srcIdx = i * ratio;
-                const idx = Math.floor(srcIdx);
-                const frac = srcIdx - idx;
-                const s0 = inputData[idx] || 0;
-                const s1 = inputData[Math.min(idx + 1, inputData.length - 1)] || 0;
-                output[i] = s0 + frac * (s1 - s0);
+                const center = i * ratio;
+                let sample = 0;
+                for (let k = 0; k < FILTER_LEN; k++) {
+                  const srcIdx = Math.round(center) - halfLen + k;
+                  const s = (srcIdx >= 0 && srcIdx < inputData.length) ? inputData[srcIdx] : 0;
+                  sample += s * filterKernel[k];
+                }
+                // Clamp to prevent clipping from gain boost
+                output[i] = Math.max(-1.0, Math.min(1.0, sample));
               }
 
-              // Send to bridge via exposed Node.js function
+              // Send as base64 binary (much faster than JSON number array)
               const bridgeFn = (window as any).__vexaBridgeSendAudio;
               if (typeof bridgeFn === 'function') {
-                bridgeFn(Array.from(output));
+                bridgeFn(float32ToBase64(output));
               }
 
+              // Compute RMS — log periodically or when speech detected
+              let rms = 0;
+              for (let i = 0; i < output.length; i++) rms += output[i] * output[i];
+              rms = Math.sqrt(rms / output.length);
+
               chunkCount++;
-              if (chunkCount % 100 === 0) {
-                // Log every ~6 seconds at 16kHz
-                let rms = 0;
-                for (let i = 0; i < output.length; i++) rms += output[i] * output[i];
-                rms = Math.sqrt(rms / output.length);
-                (window as any).logBot(`[Bridge Audio] Sent ${chunkCount} chunks, last RMS=${rms.toFixed(6)}`);
+              // Log every 500 chunks (~43s) for status, or on speech
+              if (chunkCount % 500 === 0) {
+                (window as any).logBot(`[Bridge Audio] chunk=${chunkCount} RMS=${rms.toFixed(6)} gain=${gainNode.gain.value}`);
               }
             };
 
-            merger.connect(scriptNode);
+            gainNode.connect(scriptNode);
             scriptNode.connect(audioCtx.destination);
 
-            // Watch for new streams appearing later (new participants joining)
+            // Mute all injected <audio> elements to prevent speaker echo
+            // (replaces --mute-audio which kills AudioContext data flow)
+            const audioEls = ((window as any).__vexaInjectedAudioElements || []) as HTMLAudioElement[];
+            for (const el of audioEls) {
+              el.volume = 0;
+            }
+            (window as any).logBot(`[Bridge Audio] Muted ${audioEls.length} <audio> elements (volume=0)`);
+
+            // Set up onunmute listeners on all tracks for diagnostics
+            for (const stream of streams) {
+              for (const track of stream.getAudioTracks()) {
+                track.onunmute = () => {
+                  (window as any).logBot(`[Bridge Audio] Track ${track.id.substring(0,8)} UNMUTED`);
+                };
+              }
+            }
+
+            // Watch for new streams/elements appearing later (new participants)
             let knownStreamCount = streams.length;
+            let knownAudioElCount = audioEls.length;
             setInterval(() => {
+              // Mute new audio elements
+              const curEls = ((window as any).__vexaInjectedAudioElements || []) as HTMLAudioElement[];
+              for (let i = knownAudioElCount; i < curEls.length; i++) {
+                curEls[i].volume = 0;
+              }
+              knownAudioElCount = curEls.length;
+              // Connect new streams
               const currentStreams = ((window as any).__vexaCapturedRemoteAudioStreams || []) as MediaStream[];
               if (currentStreams.length > knownStreamCount) {
                 for (let i = knownStreamCount; i < currentStreams.length; i++) {
@@ -458,6 +544,71 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
               audioCtx.close().catch(() => {});
               resolve();
             });
+
+            // Initialize speaker detection in bridge mode
+            {
+              const selectorsTyped = selectors as any;
+
+              function getParticipantId(el: HTMLElement): string {
+                return el.getAttribute('data-participant-id') || el.id || 'unknown';
+              }
+
+              function getParticipantName(el: HTMLElement): string {
+                const nameSelectors: string[] = selectorsTyped.nameSelectors || [
+                  '[data-self-name]', '.ZjFb7c', '.participant-name'
+                ];
+                for (const sel of nameSelectors) {
+                  const nameEl = el.querySelector(sel);
+                  if (nameEl) {
+                    const attr = nameEl.getAttribute('data-self-name');
+                    if (attr) return attr;
+                    if (nameEl.textContent) return nameEl.textContent.trim();
+                  }
+                }
+                return 'Unknown';
+              }
+
+              function hasSpeakingIndicator(container: HTMLElement): boolean {
+                const indicators: string[] = selectorsTyped.speakingIndicators || [];
+                return indicators.some(sel => container.querySelector(sel) !== null);
+              }
+
+              function inferSpeaking(container: HTMLElement): boolean {
+                const speakingClasses: string[] = selectorsTyped.speakingClasses || [];
+                const descendant = speakingClasses.some(cls => container.querySelector('.' + cls));
+                const self = speakingClasses.some(cls => container.classList.contains(cls));
+                return descendant || self;
+              }
+
+              const lastSpeaking = new Map<string, boolean>();
+
+              function checkSpeaker(container: HTMLElement) {
+                const id = getParticipantId(container);
+                const name = getParticipantName(container);
+                const isSpeaking = hasSpeakingIndicator(container) || inferSpeaking(container);
+                const prev = lastSpeaking.get(id) || false;
+                const bridgeFn = (window as any).__vexaBridgeSpeakerEvent;
+                if (isSpeaking && !prev) {
+                  if (typeof bridgeFn === 'function') { try { bridgeFn('SPEAKER_START', name, id); } catch {} }
+                  lastSpeaking.set(id, true);
+                } else if (!isSpeaking && prev) {
+                  if (typeof bridgeFn === 'function') { try { bridgeFn('SPEAKER_END', name, id); } catch {} }
+                  lastSpeaking.set(id, false);
+                } else if (!lastSpeaking.has(id)) {
+                  lastSpeaking.set(id, isSpeaking);
+                }
+              }
+
+              // Poll for speaker changes every 500ms
+              setInterval(() => {
+                const participantSelectors: string[] = selectorsTyped.participantSelectors || [];
+                participantSelectors.forEach(sel => {
+                  document.querySelectorAll(sel).forEach(el => checkSpeaker(el as HTMLElement));
+                });
+              }, 500);
+
+              (window as any).logBot("[Bridge] Speaker detection initialized");
+            }
           })();
         });
       }
@@ -756,6 +907,13 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                 const relativeTimestampMs = Date.now() - sessionStartTime;
                 const participantId = getGoogleParticipantId(participantElement);
                 const participantName = getGoogleParticipantName(participantElement);
+
+                // Forward to bridge (Rust core) if available
+                const bridgeSpeakerFn = (window as any).__vexaBridgeSpeakerEvent;
+                if (typeof bridgeSpeakerFn === 'function') {
+                  try { bridgeSpeakerFn(eventType, participantName, participantId); } catch {}
+                }
+
                 try {
                   whisperLiveService.sendSpeakerEvent(
                     eventType,

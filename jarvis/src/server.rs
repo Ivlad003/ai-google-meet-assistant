@@ -56,7 +56,6 @@ async fn index() -> impl IntoResponse {
 #[derive(Serialize)]
 struct ConfigResponse {
     meet_url: Option<String>,
-    trigger_phrase: String,
     bot_display_name: String,
     tts_voice: String,
     openai_model: String,
@@ -66,7 +65,6 @@ async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigResponse> 
     let cfg = state.config.read().await;
     Json(ConfigResponse {
         meet_url: cfg.meet_url.clone(),
-        trigger_phrase: cfg.trigger_phrase.clone(),
         bot_display_name: cfg.bot_name.clone(),
         tts_voice: cfg.tts_voice.clone(),
         openai_model: cfg.openai_model.clone(),
@@ -76,7 +74,6 @@ async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigResponse> 
 #[derive(Deserialize)]
 struct ConfigUpdate {
     meet_url: Option<String>,
-    trigger_phrase: Option<String>,
     bot_display_name: Option<String>,
     tts_voice: Option<String>,
     openai_model: Option<String>,
@@ -96,9 +93,6 @@ async fn update_config(
 
     if let Some(url) = update.meet_url {
         cfg.meet_url = if url.is_empty() { None } else { Some(url) };
-    }
-    if let Some(tp) = update.trigger_phrase {
-        cfg.trigger_phrase = tp;
     }
     if let Some(name) = update.bot_display_name {
         cfg.bot_name = name;
@@ -126,7 +120,7 @@ struct StatusResponse {
 }
 
 async fn get_status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
-    let connected = *state.bridge_state.connected.lock().await;
+    let connected = state.bridge_state.connection_count.load(std::sync::atomic::Ordering::Relaxed) > 0;
     let bot_running = state.bot_process.lock().map(|mut p| p.is_running()).unwrap_or(false);
     Json(StatusResponse {
         bridge_connected: connected,

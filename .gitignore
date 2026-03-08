@@ -6,8 +6,9 @@ postgres-data/
 redis-data/
 minio-data/
 
-# Environment
+# Environment & config (contains API keys)
 .env
+jarvis.config.json
 
 # Artifacts
 *.png

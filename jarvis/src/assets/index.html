@@ -56,10 +56,6 @@
       <input type="text" id="meet-url" placeholder="https://meet.google.com/abc-defg-hij">
     </div>
     <div class="field">
-      <label>Trigger Phrase</label>
-      <input type="text" id="trigger" placeholder="hey bot">
-    </div>
-    <div class="field">
       <label>Bot Display Name</label>
       <input type="text" id="bot-name" placeholder="Jarvis">
     </div>
@@ -131,7 +127,6 @@ async function loadConfig() {
     const r = await fetch('/api/config');
     const c = await r.json();
     $('meet-url').value = c.meet_url || '';
-    $('trigger').value = c.trigger_phrase || '';
     $('bot-name').value = c.bot_display_name || '';
     $('tts-voice').value = c.tts_voice || 'nova';
     $('model').value = c.openai_model || 'gpt-4o';
@@ -142,7 +137,6 @@ async function saveConfig() {
   try {
     const body = {
       meet_url: $('meet-url').value,
-      trigger_phrase: $('trigger').value,
       bot_display_name: $('bot-name').value,
       tts_voice: $('tts-voice').value,
       openai_model: $('model').value,

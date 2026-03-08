@@ -9,6 +9,7 @@ use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::sync::{broadcast, mpsc, Mutex};
 
 /// Messages from vexa-bot to Rust core
@@ -46,8 +47,10 @@ pub struct BridgeState {
     pub event_tx: broadcast::Sender<(String, serde_json::Value)>,
     /// Sends commands from core to vexa-bot
     pub command_tx: broadcast::Sender<CoreMessage>,
-    /// Track if vexa-bot is connected
-    pub connected: Mutex<bool>,
+    /// Track number of active vexa-bot connections
+    pub connection_count: AtomicU32,
+    /// Current active speaker name
+    pub current_speaker: Mutex<Option<String>>,
 }
 
 impl BridgeState {
@@ -60,7 +63,8 @@ impl BridgeState {
             audio_rx: Mutex::new(audio_rx),
             event_tx,
             command_tx,
-            connected: Mutex::new(false),
+            connection_count: AtomicU32::new(0),
+            current_speaker: Mutex::new(None),
         })
     }
 }
@@ -81,7 +85,7 @@ async fn ws_handler(
 async fn handle_socket(socket: WebSocket, state: Arc<BridgeState>) {
     let (mut sender, mut receiver) = socket.split();
 
-    *state.connected.lock().await = true;
+    state.connection_count.fetch_add(1, Ordering::Relaxed);
     tracing::info!("[bridge] vexa-bot connected");
 
     // Forward commands from core to vexa-bot
@@ -115,6 +119,20 @@ async fn handle_socket(socket: WebSocket, state: Arc<BridgeState>) {
                         }
                         BotMessage::Event { event, data } => {
                             tracing::info!("[bridge] event: {} {:?}", event, data);
+
+                            // Track current speaker from speaker_activity events
+                            // Only update on SPEAKER_START — don't clear on END,
+                            // so the last speaker persists through buffered transcription
+                            if event == "speaker_activity" {
+                                if let Some(event_type) = data.get("event_type").and_then(|v| v.as_str()) {
+                                    if event_type == "SPEAKER_START" {
+                                        if let Some(name) = data.get("participant_name").and_then(|v| v.as_str()) {
+                                            *state.current_speaker.lock().await = Some(name.to_string());
+                                        }
+                                    }
+                                }
+                            }
+
                             let _ = state.event_tx.send((event, data));
                         }
                     }
@@ -134,6 +152,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<BridgeState>) {
     }
 
     send_task.abort();
-    *state.connected.lock().await = false;
+    state.connection_count.fetch_sub(1, Ordering::Relaxed);
     tracing::info!("[bridge] vexa-bot disconnected");
 }

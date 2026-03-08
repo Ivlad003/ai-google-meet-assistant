@@ -17,7 +17,8 @@ const baseBrowserArgs = [
   "--ignore-certificate-errors",
   "--ignore-ssl-errors",
   "--ignore-certificate-errors-spki-list",
-  "--disable-site-isolation-trials"
+  "--disable-site-isolation-trials",
+  "--autoplay-policy=no-user-gesture-required"
 ];
 
 /**
@@ -34,15 +35,11 @@ export function getBrowserArgs(voiceAgentEnabled: boolean = false, bridgeMode: b
   let args = [...baseBrowserArgs];
 
   if (bridgeMode) {
-    // Bridge mode (desktop): mute all Chrome audio output to prevent echo.
-    // Audio capture bypasses DOM elements and reads directly from WebRTC
-    // MediaStreams via AudioContext, so --mute-audio is safe here.
+    // Bridge mode (desktop): mute Chrome audio output to prevent echo.
     args.push("--mute-audio");
     args.push("--use-file-for-fake-audio-capture=/dev/null");
-    // Use completely fake media devices so Chrome never touches the real
-    // microphone. This prevents double-capture when user and bot are on the
-    // same machine. TTS is injected via WebRTC replaceTrack, not PulseAudio,
-    // so fake devices are safe in bridge mode.
+    // Fake devices needed for WebRTC negotiation — without this flag,
+    // remote audio tracks never unmute.
     args.push("--use-fake-device-for-media-stream");
   } else if (voiceAgentEnabled) {
     // Audio: Omit --use-file-for-fake-audio-capture so Chromium reads from

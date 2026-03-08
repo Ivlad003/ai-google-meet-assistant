@@ -1,6 +1,8 @@
 use base64::Engine;
 use clap::Parser;
 use std::sync::{Arc, Mutex};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
 mod bot_bridge;
@@ -9,6 +11,7 @@ mod db;
 mod llm;
 mod process;
 mod server;
+mod tools;
 mod transcription;
 mod tts;
 
@@ -17,7 +20,7 @@ mod tts;
 struct Args {
     /// OpenAI API key
     #[arg(long, env = "OPENAI_API_KEY")]
-    openai_key: String,
+    openai_key: Option<String>,
 
     /// Meeting URL (Google Meet, Teams, or Zoom)
     #[arg(long, env = "MEET_URL")]
@@ -44,30 +47,52 @@ struct Args {
     tts_voice: String,
 
     /// OpenAI model
-    #[arg(long, env = "OPENAI_MODEL", default_value = "gpt-4o")]
+    #[arg(long, env = "OPENAI_MODEL", default_value = "gpt-5.4")]
     model: String,
-
-    /// Trigger phrase hint for intent detection
-    #[arg(long, env = "TRIGGER_PHRASE", default_value = "hey bot")]
-    trigger_phrase: String,
 
     /// Transcription language (ISO 639-1 code, e.g. "en", "uk", "auto")
     #[arg(long, env = "LANGUAGE", default_value = "auto")]
     language: String,
+
+    /// Path to JSON config file
+    #[arg(long, env = "JARVIS_CONFIG")]
+    config: Option<String>,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("jarvis=info".parse()?))
+    let args = Args::parse();
+    let config_file = args.config.as_ref().map(|path| {
+        config::ConfigFile::load(path).unwrap_or_else(|e| {
+            eprintln!("Warning: failed to load config file '{}': {}", path, e);
+            config::ConfigFile::default()
+        })
+    });
+    let cfg = config::Config::from_args(&args, config_file.as_ref());
+
+    // Set up file logging
+    let logs_dir = cfg.data_dir.join("logs");
+    std::fs::create_dir_all(&logs_dir).ok();
+    let file_appender = tracing_appender::rolling::daily(&logs_dir, "jarvis.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("jarvis=info"));
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(non_blocking),
+        )
         .init();
 
-    let args = Args::parse();
-    let cfg = config::Config::from_args(&args);
-
     tracing::info!("Jarvis v{} starting...", env!("CARGO_PKG_VERSION"));
+    tracing::info!("Logs dir: {}", logs_dir.display());
     tracing::info!("Web UI: http://localhost:{}", cfg.port);
 
     let db = db::Database::open(&cfg.db_path)?;
@@ -106,12 +131,43 @@ async fn main() -> anyhow::Result<()> {
         &cfg.openai_key,
         &cfg.openai_model,
         &cfg.bot_name,
-        &cfg.trigger_phrase,
+        &cfg.intent_model,
+        cfg.system_prompt.as_deref(),
+        cfg.intent_prompt.clone(),
+        cfg.max_response_tokens,
+        cfg.temperature,
+        &cfg.tools,
     ));
     let tts_service = Arc::new(tts::TtsService::new(&cfg.openai_key, &cfg.tts_voice));
 
     // Create transcript broadcast channel
     let (transcript_tx, _) = tokio::sync::broadcast::channel::<String>(256);
+
+    // Create session transcript and audio files
+    let sessions_dir = cfg.data_dir.join("sessions");
+    std::fs::create_dir_all(&sessions_dir).ok();
+    let session_ts = chrono::Local::now().format("%Y-%m-%d_%H%M%S");
+    let session_transcript_path = sessions_dir.join(format!("{}.txt", session_ts));
+    let session_audio_path = sessions_dir.join(format!("{}.wav", session_ts));
+    tracing::info!("Session transcript: {}", session_transcript_path.display());
+    tracing::info!("Session audio: {}", session_audio_path.display());
+    let session_file = Arc::new(tokio::sync::Mutex::new(
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&session_transcript_path)?,
+    ));
+
+    // WAV writer for audio recording (16kHz mono 16-bit PCM)
+    let wav_spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let wav_writer = Arc::new(tokio::sync::Mutex::new(
+        hound::WavWriter::create(&session_audio_path, wav_spec)?,
+    ));
 
     // Create process manager
     let bot_process = Arc::new(Mutex::new(process::VexaBotProcess::new()));
@@ -142,12 +198,25 @@ async fn main() -> anyhow::Result<()> {
     let agent_clone = agent.clone();
     let tts_clone = tts_service.clone();
     let transcript_tx_clone = transcript_tx.clone();
+    let session_file_clone = session_file.clone();
+    let wav_writer_clone = wav_writer.clone();
+    let tools_list = Arc::new(cfg.tools.clone());
+    let http_client = Arc::new(reqwest::Client::new());
     tokio::spawn(async move {
         let mut audio_rx = bridge_for_tx.audio_rx.lock().await;
         let mut buffer: Vec<f32> = Vec::new();
         let chunk_size = 16000 * 3; // 3 seconds at 16kHz
 
         while let Some(samples) = audio_rx.recv().await {
+            // Write all audio samples to WAV file
+            {
+                let mut writer = wav_writer_clone.lock().await;
+                for &s in &samples {
+                    let sample_i16 = (s * 32767.0).clamp(-32768.0, 32767.0) as i16;
+                    let _ = writer.write_sample(sample_i16);
+                }
+            }
+
             buffer.extend_from_slice(&samples);
             if buffer.len() >= chunk_size {
                 let chunk = buffer.drain(..chunk_size).collect::<Vec<_>>();
@@ -165,32 +234,131 @@ async fn main() -> anyhow::Result<()> {
                             tracing::debug!("[transcript] filtered hallucination: {}", seg.text);
                             continue;
                         }
-                        tracing::info!("[transcript] {}", seg.text);
+                        // Get current speaker name
+                        let speaker = bridge_for_tx.current_speaker.lock().await.clone();
+                        let speaker_label = speaker.as_deref().unwrap_or("Unknown");
+
+                        tracing::info!("[transcript] [{}] {}", speaker_label, seg.text);
+
+                        // Write to session transcript file
+                        {
+                            use std::io::Write;
+                            let ts = chrono::Local::now().format("%H:%M:%S");
+                            let mut f = session_file_clone.lock().await;
+                            let _ = writeln!(f, "[{}] [{}] {}", ts, speaker_label, seg.text);
+                            let _ = f.flush();
+                        }
 
                         // Broadcast transcript line to WebSocket clients
-                        let _ = transcript_tx_clone.send(seg.text.clone());
+                        let line = format!("[{}] {}", speaker_label, seg.text);
+                        let _ = transcript_tx_clone.send(line);
 
-                        // Feed transcript to LLM agent
-                        agent_clone.add_transcript(&seg.text);
+                        // Feed transcript to LLM agent with speaker info
+                        agent_clone.add_transcript(&speaker_label, &seg.text);
 
                         // Check if the speaker is addressing the bot
-                        if let Some(question) = agent_clone.should_respond(&seg.text).await {
+                        if let Some(question) = agent_clone.should_respond(&speaker_label, &seg.text).await {
                             tracing::info!("[llm] detected question: {}", question);
 
                             match agent_clone.respond(&question).await {
                                 Ok(answer) => {
                                     tracing::info!("[llm] response: {}", answer);
 
-                                    // Synthesize TTS audio
-                                    match tts_clone.synthesize(&answer).await {
-                                        Ok(wav_bytes) => {
-                                            let audio_b64 = base64::engine::general_purpose::STANDARD.encode(&wav_bytes);
-                                            let msg = bot_bridge::CoreMessage::Speak { audio: audio_b64 };
-                                            if let Err(e) = bridge_for_tx.command_tx.send(msg) {
-                                                tracing::error!("[tts] failed to send audio to bridge: {}", e);
+                                    // Check if LLM wants to use a tool
+                                    if let Some((tool_name, params)) = tools::parse_tool_call(&answer) {
+                                        if let Some(tool) = tools_list.iter().find(|t| t.name == tool_name) {
+                                            tracing::info!("[tools] executing: {} with {:?}", tool_name, params);
+
+                                            // Spawn tool execution in a separate task so it
+                                            // doesn't block the transcription loop
+                                            let tool = tool.clone();
+                                            let http_client = http_client.clone();
+                                            let agent_bg = agent_clone.clone();
+                                            let tts_bg = tts_clone.clone();
+                                            let session_file_bg = session_file_clone.clone();
+                                            let bridge_bg = bridge_for_tx.clone();
+                                            tokio::spawn(async move {
+                                                let result = tools::execute_tool(&tool, &params, &http_client).await;
+                                                tracing::info!("[tools] result: success={}, output={}", result.success, result.output);
+
+                                                let spoken_text = match agent_bg.summarize_tool_result(&result.tool_name, result.success, &result.output).await {
+                                                    Ok(summary) => {
+                                                        agent_bg.add_tool_context(&result.tool_name, &summary);
+                                                        summary
+                                                    }
+                                                    Err(e) => {
+                                                        tracing::error!("[tools] summarize error: {}", e);
+                                                        format!("Tool {} completed but I couldn't summarize the result.", result.tool_name)
+                                                    }
+                                                };
+
+                                                // Write bot response to session file
+                                                {
+                                                    use std::io::Write;
+                                                    let ts = chrono::Local::now().format("%H:%M:%S");
+                                                    let mut f = session_file_bg.lock().await;
+                                                    let _ = writeln!(f, "[{}] [Jarvis] {}", ts, spoken_text);
+                                                    let _ = f.flush();
+                                                }
+
+                                                // Synthesize TTS audio
+                                                match tts_bg.synthesize(&spoken_text).await {
+                                                    Ok(wav_bytes) => {
+                                                        let audio_b64 = base64::engine::general_purpose::STANDARD.encode(&wav_bytes);
+                                                        let msg = bot_bridge::CoreMessage::Speak { audio: audio_b64 };
+                                                        if let Err(e) = bridge_bg.command_tx.send(msg) {
+                                                            tracing::error!("[tts] failed to send audio to bridge: {}", e);
+                                                        }
+                                                    }
+                                                    Err(e) => tracing::error!("[tts] synthesis error: {}", e),
+                                                }
+                                            });
+                                        } else {
+                                            tracing::warn!("[tools] unknown tool: {}", tool_name);
+                                            let spoken_text = format!("I don't have a tool called {}.", tool_name);
+
+                                            // Write + TTS for unknown tool
+                                            {
+                                                use std::io::Write;
+                                                let ts = chrono::Local::now().format("%H:%M:%S");
+                                                let mut f = session_file_clone.lock().await;
+                                                let _ = writeln!(f, "[{}] [Jarvis] {}", ts, spoken_text);
+                                                let _ = f.flush();
+                                            }
+                                            match tts_clone.synthesize(&spoken_text).await {
+                                                Ok(wav_bytes) => {
+                                                    let audio_b64 = base64::engine::general_purpose::STANDARD.encode(&wav_bytes);
+                                                    let msg = bot_bridge::CoreMessage::Speak { audio: audio_b64 };
+                                                    let _ = bridge_for_tx.command_tx.send(msg);
+                                                }
+                                                Err(e) => tracing::error!("[tts] synthesis error: {}", e),
                                             }
                                         }
-                                        Err(e) => tracing::error!("[tts] synthesis error: {}", e),
+                                    } else {
+                                        // Normal response (no tool call)
+                                        // Track bot response in transcript for context
+                                        agent_clone.add_bot_response_to_transcript(&answer);
+
+                                        // Write bot response to session file
+                                        {
+                                            use std::io::Write;
+                                            let ts = chrono::Local::now().format("%H:%M:%S");
+                                            let mut f = session_file_clone.lock().await;
+                                            let _ = writeln!(f, "[{}] [Jarvis] {}", ts, answer);
+                                            let _ = f.flush();
+                                        }
+
+                                        // Synthesize TTS audio
+                                        match tts_clone.synthesize(&answer).await {
+                                            Ok(wav_bytes) => {
+                                                let audio_b64 = base64::engine::general_purpose::STANDARD.encode(&wav_bytes);
+                                                let msg = bot_bridge::CoreMessage::Speak { audio: audio_b64 };
+                                                if let Err(e) = bridge_for_tx.command_tx.send(msg) {
+                                                    tracing::error!("[tts] failed to send audio to bridge: {}", e);
+                                                }
+                                            }
+                                            Err(e) => tracing::error!("[tts] synthesis error: {}", e),
+                                        }
                                     }
                                 }
                                 Err(e) => tracing::error!("[llm] response error: {}", e),
@@ -237,6 +405,20 @@ async fn main() -> anyhow::Result<()> {
     if let Ok(mut proc) = bot_process.lock() {
         let _ = proc.stop();
     }
+
+    // Finalize WAV file (write header with correct data length)
+    if let Ok(writer) = Arc::try_unwrap(wav_writer) {
+        let writer = writer.into_inner();
+        let _ = writer.finalize();
+    }
+
+    // Print session file paths to terminal
+    println!();
+    println!("=== Session Complete ===");
+    println!("Transcript: {}", session_transcript_path.display());
+    println!("Audio:      {}", session_audio_path.display());
+    println!("Logs:       {}", logs_dir.display());
+    println!("========================");
 
     Ok(())
 }
