@@ -85,10 +85,10 @@ After each meeting, Jarvis saves:
 
 Transcript format:
 ```
-[11:11:12] [Borys Stoilovskyi] І тому, коли я включаю LED-лєнту...
-[11:11:18] [Borys Stoilovskyi] на телевізорі, а коли без світла...
-[11:11:24] [Vlad Kosmach] Так, раз, два, три, чотири, п'ять.
-[11:11:30] [Jarvis] Привіт! Я завжди готовий допомогти.
+[14:05:12] [Alice] Let's discuss the Q3 roadmap priorities.
+[14:05:18] [Bob] I think we should focus on the API redesign first.
+[14:05:24] [Alice] Jarvis, summarize the main points so far.
+[14:05:30] [Jarvis] So far you've discussed Q3 priorities, with a focus on API redesign.
 ```
 
 ## Quick Start / Швидкий старт
