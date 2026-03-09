@@ -9,7 +9,7 @@ use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use tokio::sync::{broadcast, mpsc, Mutex};
 
 /// Messages from vexa-bot to Rust core
@@ -51,6 +51,8 @@ pub struct BridgeState {
     pub connection_count: AtomicU32,
     /// Current active speaker name
     pub current_speaker: Mutex<Option<String>>,
+    /// True while bot is speaking (suppresses audio capture to prevent self-echo)
+    pub is_speaking: AtomicBool,
 }
 
 impl BridgeState {
@@ -65,6 +67,7 @@ impl BridgeState {
             command_tx,
             connection_count: AtomicU32::new(0),
             current_speaker: Mutex::new(None),
+            is_speaking: AtomicBool::new(false),
         })
     }
 }
@@ -107,6 +110,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<BridgeState>) {
                 if let Ok(bot_msg) = serde_json::from_str::<BotMessage>(&text) {
                     match bot_msg {
                         BotMessage::Audio { data, .. } => {
+                            // Skip audio while bot is speaking to prevent self-echo
+                            if state.is_speaking.load(Ordering::Relaxed) {
+                                continue;
+                            }
                             if let Ok(bytes) =
                                 base64::engine::general_purpose::STANDARD.decode(&data)
                             {
@@ -119,6 +126,20 @@ async fn handle_socket(socket: WebSocket, state: Arc<BridgeState>) {
                         }
                         BotMessage::Event { event, data } => {
                             tracing::info!("[bridge] event: {} {:?}", event, data);
+
+                            // Track speak state to suppress self-echo
+                            if event == "speak.started" {
+                                state.is_speaking.store(true, Ordering::Relaxed);
+                                tracing::debug!("[bridge] speaking=true (suppressing audio capture)");
+                            } else if event == "speak.completed" {
+                                // Delay clearing to let residual echo fade
+                                let state_speak = state.clone();
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                                    state_speak.is_speaking.store(false, Ordering::Relaxed);
+                                    tracing::debug!("[bridge] speaking=false (audio capture resumed)");
+                                });
+                            }
 
                             // Track current speaker from speaker_activity events
                             // Only update on SPEAKER_START — don't clear on END,
@@ -139,6 +160,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<BridgeState>) {
                 }
             }
             Message::Binary(bytes) => {
+                // Skip audio while bot is speaking to prevent self-echo
+                if state.is_speaking.load(Ordering::Relaxed) {
+                    continue;
+                }
                 // Raw binary audio: Float32 PCM directly
                 let samples: Vec<f32> = bytes
                     .chunks_exact(4)

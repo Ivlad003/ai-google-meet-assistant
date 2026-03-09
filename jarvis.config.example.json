@@ -1,12 +1,11 @@
 {
   "openai_key": "sk-proj-your-api-key-here",
   "meet_url": "https://meet.google.com/abc-defg-hij",
-  "openai_model": "gpt-5.4",
-  "intent_model": "gpt-5-mini",
   "bot_name": "Jarvis",
-  "trigger_phrase": "hey bot",
-  "tts_voice": "nova",
   "language": "auto",
+  "openai_model": "gpt-5.4",
+  "intent_model": "gpt-5",
+  "tts_voice": "nova",
   "transcription_mode": "cloud",
   "whisper_model": "small",
   "port": 8080,
@@ -15,70 +14,5 @@
   "temperature": 0.7,
   "system_prompt": null,
   "intent_prompt": null,
-  "tools": [
-    {
-      "name": "jira_create_issue",
-      "type": "curl",
-      "description": "Create a Jira issue. Use when someone asks to create a ticket, task, or bug report.",
-      "method": "POST",
-      "url": "https://your-domain.atlassian.net/rest/api/3/issue",
-      "headers": {
-        "Authorization": "Basic ${JIRA_API_TOKEN}",
-        "Content-Type": "application/json"
-      },
-      "parameters": {
-        "summary": "Issue title/summary",
-        "description": "Detailed description of the issue",
-        "issue_type": "Task, Bug, or Story (default: Task)"
-      },
-      "body_template": {
-        "fields": {
-          "project": { "key": "PROJ" },
-          "summary": "{summary}",
-          "description": {
-            "type": "doc",
-            "version": 1,
-            "content": [
-              {
-                "type": "paragraph",
-                "content": [
-                  { "type": "text", "text": "{description}" }
-                ]
-              }
-            ]
-          },
-          "issuetype": { "name": "{issue_type}" }
-        }
-      }
-    },
-    {
-      "name": "slack_send_message",
-      "type": "curl",
-      "description": "Send a message to a Slack channel. Use when someone asks to notify a channel or send a message to Slack.",
-      "method": "POST",
-      "url": "https://slack.com/api/chat.postMessage",
-      "headers": {
-        "Authorization": "Bearer ${SLACK_BOT_TOKEN}",
-        "Content-Type": "application/json"
-      },
-      "parameters": {
-        "channel": "Slack channel name or ID (e.g. #general)",
-        "message": "The message text to send"
-      },
-      "body_template": {
-        "channel": "{channel}",
-        "text": "{message}"
-      }
-    },
-    {
-      "name": "code_task",
-      "type": "claude-code",
-      "description": "Execute a coding task using Claude Code CLI. Use when someone asks to write code, fix a bug, or make changes to the codebase.",
-      "parameters": {
-        "task": "Description of the coding task to perform"
-      },
-      "prompt_template": "{task}",
-      "working_directory": "/path/to/your/project"
-    }
-  ]
+  "tools": []
 }
