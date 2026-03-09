@@ -14,5 +14,14 @@
   "temperature": 0.7,
   "system_prompt": null,
   "intent_prompt": null,
-  "tools": []
+  "tools": [
+    {
+      "name": "get_joke",
+      "type": "curl",
+      "description": "Get a random joke. Use when someone asks for a joke or wants to hear something funny.",
+      "method": "GET",
+      "url": "https://official-joke-api.appspot.com/jokes/random",
+      "parameters": {}
+    }
+  ]
 }
