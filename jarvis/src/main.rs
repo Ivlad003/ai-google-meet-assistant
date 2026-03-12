@@ -133,6 +133,10 @@ async fn main() -> anyhow::Result<()> {
     // Create process manager
     let bot_process = Arc::new(Mutex::new(process::VexaBotProcess::new()));
 
+    // Watch channels for runtime config propagation and cooperative shutdown
+    let (response_mode_tx, response_mode_rx) = tokio::sync::watch::channel(cfg.response_mode.clone());
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
     // Create AppState and start web server
     let app_state = Arc::new(server::AppState {
         config: tokio::sync::RwLock::new(cfg.clone()),
@@ -140,6 +144,8 @@ async fn main() -> anyhow::Result<()> {
         bridge_state: bridge_state.clone(),
         agent: agent.clone(),
         bot_process: bot_process.clone(),
+        response_mode_tx,
+        shutdown_tx: shutdown_tx.clone(),
     });
 
     let web_router = server::router(app_state);

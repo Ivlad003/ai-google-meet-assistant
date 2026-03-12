@@ -29,6 +29,8 @@ pub struct AppState {
     pub bridge_state: Arc<BridgeState>,
     pub agent: Arc<LlmAgent>,
     pub bot_process: Arc<std::sync::Mutex<process::VexaBotProcess>>,
+    pub response_mode_tx: tokio::sync::watch::Sender<crate::config::ResponseMode>,
+    pub shutdown_tx: tokio::sync::watch::Sender<bool>,
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
