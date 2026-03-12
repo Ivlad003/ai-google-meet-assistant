@@ -41,6 +41,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/join", post(join_meeting))
         .route("/api/leave", post(leave_meeting))
         .route("/api/transcript", get(transcript_ws))
+        .route("/api/summary", get(get_summary))
         .with_state(state)
 }
 
@@ -244,6 +245,22 @@ async fn leave_meeting(State(state): State<Arc<AppState>>) -> Json<ActionRespons
             ok: false,
             message: format!("Failed to stop vexa-bot: {}", e),
         }),
+    }
+}
+
+// --- Summary endpoint ---
+
+async fn get_summary(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    if state.agent.transcript_len() == 0 {
+        return Json(serde_json::json!({
+            "ok": false,
+            "message": "No transcript available yet"
+        }));
+    }
+
+    match state.agent.summary().await {
+        Ok(summary) => Json(serde_json::json!({ "ok": true, "summary": summary })),
+        Err(e) => Json(serde_json::json!({ "ok": false, "message": format!("{}", e) })),
     }
 }
 
