@@ -36,6 +36,8 @@ pub enum CoreMessage {
     Speak { audio: String }, // base64 WAV
     #[serde(rename = "command")]
     Command { action: String },
+    #[serde(rename = "shutdown")]
+    Shutdown,
 }
 
 pub struct BridgeState {
@@ -53,6 +55,8 @@ pub struct BridgeState {
     pub current_speaker: Mutex<Option<String>>,
     /// True while bot is speaking (suppresses audio capture to prevent self-echo)
     pub is_speaking: AtomicBool,
+    /// Path to finalized video file, set by vexa-bot on shutdown
+    pub video_ready_path: Mutex<Option<String>>,
 }
 
 impl BridgeState {
@@ -68,6 +72,7 @@ impl BridgeState {
             connection_count: AtomicU32::new(0),
             current_speaker: Mutex::new(None),
             is_speaking: AtomicBool::new(false),
+            video_ready_path: Mutex::new(None),
         })
     }
 }
@@ -151,6 +156,13 @@ async fn handle_socket(socket: WebSocket, state: Arc<BridgeState>) {
                                             *state.current_speaker.lock().await = Some(name.to_string());
                                         }
                                     }
+                                }
+                            }
+
+                            if event == "video_ready" {
+                                if let Some(path) = data.get("path").and_then(|v| v.as_str()) {
+                                    *state.video_ready_path.lock().await = Some(path.to_string());
+                                    tracing::info!("[bridge] video ready: {}", path);
                                 }
                             }
 
