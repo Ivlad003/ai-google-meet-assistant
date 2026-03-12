@@ -348,8 +348,7 @@ impl LlmAgent {
             history.clone()
         };
 
-        // Reasoning models (gpt-5, o3, etc.) don't support temperature
-        let is_reasoning = self.model.starts_with("gpt-5") || self.model.starts_with("o1") || self.model.starts_with("o3") || self.model.starts_with("o4");
+        let is_reasoning = crate::config::is_reasoning_model(&self.model);
         let req = ChatRequest {
             model: self.model.clone(),
             messages,
@@ -446,15 +445,20 @@ impl LlmAgent {
         max_tokens: u32,
         reasoning_effort: Option<&str>,
     ) -> anyhow::Result<String> {
+        let is_reasoning = crate::config::is_reasoning_model(model);
         let req = ChatRequest {
             model: model.to_string(),
             messages: vec![ChatMessage {
                 role: "user".to_string(),
                 content: prompt.to_string(),
             }],
-            temperature: temp,
-            max_completion_tokens: max_tokens,
-            reasoning_effort: reasoning_effort.map(|s| s.to_string()),
+            temperature: if is_reasoning { None } else { temp },
+            max_completion_tokens: if is_reasoning { max_tokens.max(1000) } else { max_tokens },
+            reasoning_effort: if is_reasoning {
+                Some(reasoning_effort.unwrap_or("low").to_string())
+            } else {
+                reasoning_effort.map(|s| s.to_string())
+            },
         };
 
         let resp = self
