@@ -221,7 +221,7 @@ async fn join_meeting(
 
     // Start the process
     let mut proc = state.bot_process.lock().unwrap();
-    match proc.start(&node_path, &vexa_bot_dir, &bridge_url, &meet_url, &bot_name) {
+    match proc.start(&node_path, &vexa_bot_dir, &bridge_url, &meet_url, &bot_name, false, "", false) {
         Ok(()) => Json(ActionResponse {
             ok: true,
             message: format!("Joining meeting: {}", meet_url),
