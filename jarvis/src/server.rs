@@ -61,6 +61,7 @@ struct ConfigResponse {
     bot_display_name: String,
     tts_voice: String,
     openai_model: String,
+    response_mode: String,
 }
 
 async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigResponse> {
@@ -70,6 +71,10 @@ async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigResponse> 
         bot_display_name: cfg.bot_name.clone(),
         tts_voice: cfg.tts_voice.clone(),
         openai_model: cfg.openai_model.clone(),
+        response_mode: match cfg.response_mode {
+            crate::config::ResponseMode::NameOnly => "name_only".to_string(),
+            crate::config::ResponseMode::Smart => "smart".to_string(),
+        },
     })
 }
 
@@ -79,6 +84,7 @@ struct ConfigUpdate {
     bot_display_name: Option<String>,
     tts_voice: Option<String>,
     openai_model: Option<String>,
+    response_mode: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -104,6 +110,15 @@ async fn update_config(
     }
     if let Some(model) = update.openai_model {
         cfg.openai_model = model;
+    }
+    if let Some(mode) = update.response_mode {
+        let new_mode = match mode.as_str() {
+            "name_only" => crate::config::ResponseMode::NameOnly,
+            _ => crate::config::ResponseMode::Smart,
+        };
+        cfg.response_mode = new_mode.clone();
+        // Propagate to audio task via watch channel
+        let _ = state.response_mode_tx.send(new_mode);
     }
 
     Json(ConfigUpdateResponse {
