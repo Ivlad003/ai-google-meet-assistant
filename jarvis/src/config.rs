@@ -19,6 +19,7 @@ pub struct ConfigFile {
     pub intent_prompt: Option<String>,
     pub max_response_tokens: Option<u32>,
     pub temperature: Option<f32>,
+    pub response_mode: Option<String>,
     #[serde(default)]
     pub tools: Option<Vec<super::tools::ToolDef>>,
 }
@@ -56,6 +57,7 @@ pub struct Config {
     pub intent_prompt: Option<String>,
     pub max_response_tokens: u32,
     pub temperature: f32,
+    pub response_mode: ResponseMode,
     pub tools: Vec<super::tools::ToolDef>,
 }
 
@@ -63,6 +65,12 @@ pub struct Config {
 pub enum TranscriptionMode {
     Local,
     Cloud,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResponseMode {
+    Smart,
+    NameOnly,
 }
 
 impl Config {
@@ -99,6 +107,10 @@ impl Config {
             intent_prompt: cf.intent_prompt.clone(),
             max_response_tokens: cf.max_response_tokens.unwrap_or(150),
             temperature: cf.temperature.unwrap_or(0.7),
+            response_mode: match cf.response_mode.as_deref() {
+                Some("name_only") => ResponseMode::NameOnly,
+                _ => ResponseMode::Smart,
+            },
             tools: cf.tools.clone().unwrap_or_default(),
         }
     }
@@ -108,4 +120,12 @@ fn dirs_or_default() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("jarvis")
+}
+
+/// Check if a model name is a reasoning model (no temperature, uses reasoning_effort).
+pub fn is_reasoning_model(model: &str) -> bool {
+    model.starts_with("gpt-5")
+        || model.starts_with("o1")
+        || model.starts_with("o3")
+        || model.starts_with("o4")
 }
