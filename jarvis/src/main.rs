@@ -15,6 +15,18 @@ mod tools;
 mod transcription;
 mod tts;
 
+/// Check if ffmpeg is available on the system PATH.
+fn has_ffmpeg() -> bool {
+    let cmd = if cfg!(target_os = "windows") { "where" } else { "which" };
+    std::process::Command::new(cmd)
+        .arg("ffmpeg")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 /// Repair WAV files that have zero-length headers but actual audio data.
 /// This happens when the process is killed (SIGKILL) before finalize() runs.
 fn repair_wav_files(sessions_dir: &std::path::Path) {
@@ -185,6 +197,21 @@ async fn main() -> anyhow::Result<()> {
     let session_audio_path = sessions_dir.join(format!("{}.wav", session_ts));
     tracing::info!("Session transcript: {}", session_transcript_path.display());
     tracing::info!("Session audio: {}", session_audio_path.display());
+
+    // Video recording setup
+    let ffmpeg_available = if cfg.record_video { has_ffmpeg() } else { false };
+    let session_video_path = if cfg.record_video {
+        let ext = if ffmpeg_available { "mkv" } else { "webm" };
+        let path = sessions_dir.join(format!("{}.{}", session_ts, ext));
+        tracing::info!("Session video: {}", path.display());
+        if !ffmpeg_available {
+            tracing::warn!("record_video enabled but ffmpeg not found; video will be saved as .webm");
+        }
+        Some(path)
+    } else {
+        None
+    };
+
     let session_file = Arc::new(tokio::sync::Mutex::new(
         std::fs::OpenOptions::new()
             .create(true)
@@ -448,6 +475,9 @@ async fn main() -> anyhow::Result<()> {
                             &bridge_url,
                             meet_url,
                             &cfg.bot_name,
+                            cfg.record_video,
+                            session_video_path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default().as_str(),
+                            ffmpeg_available,
                         ) {
                             tracing::error!("[process] failed to start vexa-bot: {}", e);
                         }
@@ -476,7 +506,20 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Shutting down...");
 
-    // Stop vexa-bot on shutdown
+    // Graceful shutdown: send shutdown command, wait for vexa-bot to exit
+    if bridge_state.connection_count.load(std::sync::atomic::Ordering::Relaxed) > 0 {
+        tracing::info!("Sending shutdown command to vexa-bot...");
+        let _ = bridge_state.command_tx.send(bot_bridge::CoreMessage::Shutdown);
+        // Wait up to 10 seconds for vexa-bot to disconnect (video finalization may take a few seconds)
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_secs(10) {
+            if bridge_state.connection_count.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+    }
+    // Force kill if still running
     if let Ok(mut proc) = bot_process.lock() {
         let _ = proc.stop();
     }
@@ -507,6 +550,12 @@ async fn main() -> anyhow::Result<()> {
     println!("=== Session Complete ===");
     println!("Transcript: {}", session_transcript_path.display());
     println!("Audio:      {}", session_audio_path.display());
+    if let Some(ref video_path) = session_video_path {
+        let final_path = bridge_state.video_ready_path.lock().await.clone();
+        let default_path = video_path.to_string_lossy().to_string();
+        let display_path = final_path.as_deref().unwrap_or(&default_path);
+        println!("Video:      {}", display_path);
+    }
     println!("Logs:       {}", logs_dir.display());
     println!("========================");
 
