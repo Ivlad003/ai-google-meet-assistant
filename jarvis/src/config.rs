@@ -20,6 +20,7 @@ pub struct ConfigFile {
     pub max_response_tokens: Option<u32>,
     pub temperature: Option<f32>,
     pub response_mode: Option<String>,
+    pub record_video: Option<bool>,
     #[serde(default)]
     pub tools: Option<Vec<super::tools::ToolDef>>,
 }
@@ -58,6 +59,7 @@ pub struct Config {
     pub max_response_tokens: u32,
     pub temperature: f32,
     pub response_mode: ResponseMode,
+    pub record_video: bool,
     pub tools: Vec<super::tools::ToolDef>,
 }
 
@@ -111,6 +113,7 @@ impl Config {
                 Some("name_only") => ResponseMode::NameOnly,
                 _ => ResponseMode::Smart,
             },
+            record_video: cf.record_video.unwrap_or(false),
             tools: cf.tools.clone().unwrap_or_default(),
         }
     }
