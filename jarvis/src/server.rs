@@ -62,6 +62,7 @@ struct ConfigResponse {
     tts_voice: String,
     openai_model: String,
     response_mode: String,
+    record_video: bool,
 }
 
 async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigResponse> {
@@ -75,6 +76,7 @@ async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigResponse> 
             crate::config::ResponseMode::NameOnly => "name_only".to_string(),
             crate::config::ResponseMode::Smart => "smart".to_string(),
         },
+        record_video: cfg.record_video,
     })
 }
 
@@ -85,6 +87,7 @@ struct ConfigUpdate {
     tts_voice: Option<String>,
     openai_model: Option<String>,
     response_mode: Option<String>,
+    record_video: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -119,6 +122,10 @@ async fn update_config(
         cfg.response_mode = new_mode.clone();
         // Propagate to audio task via watch channel
         let _ = state.response_mode_tx.send(new_mode);
+    }
+
+    if let Some(record_video) = update.record_video {
+        cfg.record_video = record_video;
     }
 
     Json(ConfigUpdateResponse {
