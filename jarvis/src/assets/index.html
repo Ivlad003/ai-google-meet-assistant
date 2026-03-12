@@ -78,6 +78,13 @@
         <option value="gpt-4-turbo">GPT-4 Turbo</option>
       </select>
     </div>
+    <div class="field">
+      <label>Response Mode</label>
+      <select id="response-mode">
+        <option value="smart">Smart (LLM intent detection)</option>
+        <option value="name_only">Name Only (respond when name said)</option>
+      </select>
+    </div>
     <div class="controls">
       <button class="btn btn-primary" onclick="saveConfig()">Save &amp; Reload</button>
       <button class="btn btn-success" onclick="joinMeeting()">Join Meeting</button>
@@ -108,6 +115,17 @@
     <h2>Live Transcript</h2>
     <div class="transcript-feed" id="transcript"></div>
   </div>
+
+  <div class="panel transcript-panel">
+    <h2>Meeting Summary</h2>
+    <div class="controls" style="margin-bottom: 12px; margin-top: 0;">
+      <button class="btn btn-primary" id="summarize-btn" onclick="getSummary()">Summarize</button>
+      <button class="btn btn-success" id="copy-btn" onclick="copySummary()" style="display:none;">Copy to Clipboard</button>
+    </div>
+    <div id="summary-content" style="background: #0d1117; border-radius: 4px; padding: 12px; min-height: 60px; font-size: 14px; line-height: 1.6; white-space: pre-wrap; color: #aaa;">
+      Click Summarize to generate a summary of recent conversation.
+    </div>
+  </div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -130,6 +148,7 @@ async function loadConfig() {
     $('bot-name').value = c.bot_display_name || '';
     $('tts-voice').value = c.tts_voice || 'nova';
     $('model').value = c.openai_model || 'gpt-4o';
+    $('response-mode').value = c.response_mode || 'smart';
   } catch(e) { console.error('loadConfig', e); }
 }
 
@@ -140,6 +159,7 @@ async function saveConfig() {
       bot_display_name: $('bot-name').value,
       tts_voice: $('tts-voice').value,
       openai_model: $('model').value,
+      response_mode: $('response-mode').value,
     };
     const r = await fetch('/api/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
     const res = await r.json();
@@ -214,6 +234,56 @@ function connectTranscript() {
   };
   ws.onclose = () => setTimeout(connectTranscript, 3000);
   ws.onerror = () => ws.close();
+}
+
+async function getSummary() {
+  const btn = $('summarize-btn');
+  btn.textContent = 'Generating...';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/summary');
+    const res = await r.json();
+    const el = $('summary-content');
+    if (res.ok) {
+      el.style.color = '#e0e0e0';
+      el.textContent = res.summary;
+      $('copy-btn').style.display = '';
+    } else {
+      el.style.color = '#e94560';
+      el.textContent = res.message;
+    }
+  } catch(e) {
+    $('summary-content').style.color = '#e94560';
+    $('summary-content').textContent = 'Failed: ' + e.message;
+  } finally {
+    btn.textContent = 'Summarize';
+    btn.disabled = false;
+  }
+}
+
+function copySummary() {
+  const text = $('summary-content').textContent;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => toast('Copied to clipboard!')).catch(() => fallbackCopy(text));
+  } else {
+    fallbackCopy(text);
+  }
+}
+
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand('copy');
+    toast('Copied to clipboard!');
+  } catch(e) {
+    toast('Copy failed');
+  }
+  document.body.removeChild(ta);
 }
 
 loadConfig();
