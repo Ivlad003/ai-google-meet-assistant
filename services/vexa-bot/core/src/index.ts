@@ -15,6 +15,10 @@ import { ScreenContentService, getVirtualCameraInitScript } from "./services/scr
 import { ScreenShareService } from "./services/screen-share"; // kept for Teams; unused for Google Meet camera-feed approach
 import { createClient, RedisClientType } from 'redis';
 import { Page, Browser } from 'playwright-core';
+import { execSync } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 import { BridgeClient } from './services/bridge-client';
 // HTTP imports removed - using unified callback service instead
 
@@ -509,6 +513,45 @@ const handleRedisMessage = async (message: string, channel: string, page: Page |
 };
 // ----------------------------
 
+// --- Video finalization ---
+async function finalizeVideo(tempVideoPath: string): Promise<string | null> {
+  const videoOutputPath = process.env.VIDEO_OUTPUT_PATH || '';
+  if (!videoOutputPath || !tempVideoPath) return null;
+
+  try {
+    // Wait for Playwright to finish writing
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    const ffmpegAvailable = process.env.FFMPEG_AVAILABLE === 'true';
+    if (ffmpegAvailable) {
+      try {
+        execSync(`ffmpeg -y -i "${tempVideoPath}" -c:v copy -c:a copy "${videoOutputPath}"`, {
+          timeout: 30000,
+          stdio: 'pipe',
+        });
+        log(`[Video] Remuxed to MKV: ${videoOutputPath}`);
+        try { fs.unlinkSync(tempVideoPath); } catch {}
+        return videoOutputPath;
+      } catch (ffmpegErr: any) {
+        log(`[Video] ffmpeg remux failed: ${ffmpegErr.message}`);
+      }
+    }
+    // Fallback: rename to webm
+    const webmPath = videoOutputPath.replace(/\.[^.]+$/, '.webm');
+    try {
+      fs.renameSync(tempVideoPath, webmPath);
+      log(`[Video] Saved as WebM: ${webmPath}`);
+      return webmPath;
+    } catch (renameErr: any) {
+      log(`[Video] Rename failed, temp file at: ${tempVideoPath}`);
+      return tempVideoPath;
+    }
+  } catch (err: any) {
+    log(`[Video] Finalization error: ${err.message}`);
+    return null;
+  }
+}
+
 // --- ADDED: Graceful Leave Function ---
 async function performGracefulLeave(
   page: Page | null, // Allow page to be null for cases where it might not be available
@@ -636,6 +679,17 @@ async function performGracefulLeave(
     }
   }
 
+  // Capture video path before closing (Playwright needs open page for video().path())
+  let tempVideoPath: string | null = null;
+  if (process.env.RECORD_VIDEO === 'true' && page && !page.isClosed()) {
+    try {
+      tempVideoPath = await page.video()?.path() || null;
+      if (tempVideoPath) log(`[Video] Captured temp video path: ${tempVideoPath}`);
+    } catch (e: any) {
+      log(`[Video] Could not get video path: ${e.message}`);
+    }
+  }
+
   // Close the browser page if it's still open and wasn't closed by platform leave
   if (page && !page.isClosed()) {
     log("[Graceful Leave] Ensuring page is closed.");
@@ -644,6 +698,19 @@ async function performGracefulLeave(
       log("[Graceful Leave] Page closed.");
     } catch (pageCloseError: any) {
       log(`[Graceful Leave] Error closing page: ${pageCloseError.message}`);
+    }
+  }
+
+  // Finalize video recording after page close (Playwright writes video on close)
+  if (tempVideoPath) {
+    try {
+      const finalVideoPath = await finalizeVideo(tempVideoPath);
+      if (finalVideoPath && bridgeClient?.isConnected()) {
+        bridgeClient.sendVideoReady(finalVideoPath);
+        log(`[Video] Sent video_ready to Jarvis: ${finalVideoPath}`);
+      }
+    } catch (videoErr: any) {
+      log(`[Video] Error during finalization: ${videoErr.message}`);
     }
   }
 
@@ -1105,6 +1172,14 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
       }
     });
 
+    // Handle shutdown command from Jarvis (graceful exit for video finalization)
+    bridgeClient.onShutdownReceived(() => {
+      log('[Bridge] Received shutdown command from Jarvis');
+      if (!isShuttingDown) {
+        performGracefulLeave(page, 0, 'bridge_shutdown');
+      }
+    });
+
     // Send initial bot info event
     bridgeClient.sendEvent('bot.started', {
       meetingUrl: botConfig.meetingUrl,
@@ -1217,6 +1292,14 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     });
     log(`Browser launched in ${headless ? 'headless' : 'headed'} mode${inBridgeMode ? ' (bridge/mute-audio)' : ''}`);
 
+    // Video recording setup
+    const recordVideo = process.env.RECORD_VIDEO === 'true';
+    let tempVideoDir: string | null = null;
+    if (recordVideo) {
+      tempVideoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vexa-video-'));
+      log(`[Video] Recording enabled, temp dir: ${tempVideoDir}`);
+    }
+
     // Create a new page with permissions and viewport for non-Teams
     const context = await browserInstance.newContext({
       permissions: ["camera", "microphone"],
@@ -1224,7 +1307,13 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
       viewport: {
         width: 1280,
         height: 720
-      }
+      },
+      ...(recordVideo && tempVideoDir ? {
+        recordVideo: {
+          dir: tempVideoDir,
+          size: { width: 1280, height: 720 }
+        }
+      } : {}),
     });
 
     // Set bridge mode flag — echo prevention is handled by --mute-audio Chrome flag
