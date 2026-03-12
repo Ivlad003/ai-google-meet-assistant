@@ -19,6 +19,7 @@ export class BridgeClient {
   private url: string;
   private onCommand: ((action: string, data: any) => void) | null = null;
   private onSpeakAudio: ((audioBase64: string) => void) | null = null;
+  private onShutdown: (() => void) | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private closed: boolean = false;
 
@@ -55,6 +56,8 @@ export class BridgeClient {
             this.onSpeakAudio(msg.audio);
           } else if (msg.type === 'command' && this.onCommand) {
             this.onCommand(msg.action, msg);
+          } else if (msg.type === 'shutdown' && this.onShutdown) {
+            this.onShutdown();
           }
         } catch (e: any) {
           log(`[Bridge] Parse error: ${e.message}`);
@@ -127,6 +130,21 @@ export class BridgeClient {
    */
   onSpeakReceived(handler: (audioBase64: string) => void): void {
     this.onSpeakAudio = handler;
+  }
+
+  /**
+   * Register handler for shutdown command from Rust.
+   * Called when Jarvis wants vexa-bot to gracefully exit.
+   */
+  onShutdownReceived(handler: () => void): void {
+    this.onShutdown = handler;
+  }
+
+  /**
+   * Notify Rust that video file is ready.
+   */
+  sendVideoReady(path: string): boolean {
+    return this.sendEvent('video_ready', { path });
   }
 
   /**
