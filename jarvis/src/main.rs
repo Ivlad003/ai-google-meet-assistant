@@ -169,12 +169,21 @@ async fn main() -> anyhow::Result<()> {
     let wav_writer_clone = wav_writer.clone();
     let tools_list = Arc::new(cfg.tools.clone());
     let http_client = Arc::new(reqwest::Client::new());
-    tokio::spawn(async move {
+    let mut response_mode_rx = response_mode_rx;
+    let mut shutdown_rx = shutdown_rx;
+    let audio_task = tokio::spawn(async move {
         let mut audio_rx = bridge_for_tx.audio_rx.lock().await;
         let mut buffer: Vec<f32> = Vec::new();
         let chunk_size = 16000 * 3; // 3 seconds at 16kHz
 
-        while let Some(samples) = audio_rx.recv().await {
+        loop {
+            let samples = tokio::select! {
+                s = audio_rx.recv() => match s {
+                    Some(samples) => samples,
+                    None => break,
+                },
+                _ = shutdown_rx.changed() => break,
+            };
             // Write all audio samples to WAV file
             {
                 let mut writer = wav_writer_clone.lock().await;
@@ -223,8 +232,25 @@ async fn main() -> anyhow::Result<()> {
                         // Feed transcript to LLM agent with speaker info
                         agent_clone.add_transcript(&speaker_label, &seg.text);
 
-                        // Check if the speaker is addressing the bot
-                        if let Some(question) = agent_clone.should_respond(&speaker_label, &seg.text).await {
+                        // Determine if bot should respond based on response_mode
+                        let question = {
+                            let mode = response_mode_rx.borrow().clone();
+                            match mode {
+                                crate::config::ResponseMode::NameOnly => {
+                                    if agent_clone.name_mentioned(&seg.text) {
+                                        let cleaned = agent_clone.strip_bot_name(&seg.text);
+                                        Some(if cleaned.is_empty() { seg.text.clone() } else { cleaned })
+                                    } else {
+                                        None
+                                    }
+                                }
+                                crate::config::ResponseMode::Smart => {
+                                    agent_clone.should_respond(&speaker_label, &seg.text).await
+                                }
+                            }
+                        };
+
+                        if let Some(question) = question {
                             tracing::info!("[llm] detected question: {}", question);
 
                             match agent_clone.respond(&question).await {
@@ -373,10 +399,24 @@ async fn main() -> anyhow::Result<()> {
         let _ = proc.stop();
     }
 
+    // Signal audio task to shut down cooperatively
+    let _ = shutdown_tx.send(true);
+    // Wait for audio task to exit (drops its Arc<wav_writer> clone)
+    let _ = audio_task.await;
+
     // Finalize WAV file (write header with correct data length)
-    if let Ok(writer) = Arc::try_unwrap(wav_writer) {
-        let writer = writer.into_inner();
-        let _ = writer.finalize();
+    match Arc::try_unwrap(wav_writer) {
+        Ok(writer) => {
+            let writer = writer.into_inner();
+            if let Err(e) = writer.finalize() {
+                tracing::warn!("Failed to finalize WAV file: {}", e);
+            } else {
+                tracing::info!("Audio file finalized: {}", session_audio_path.display());
+            }
+        }
+        Err(_) => {
+            tracing::warn!("Could not finalize WAV file — other references still held");
+        }
     }
 
     // Print session file paths to terminal
