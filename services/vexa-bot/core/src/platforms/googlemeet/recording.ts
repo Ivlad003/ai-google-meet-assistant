@@ -333,7 +333,6 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
         await new Promise<void>((resolve, reject) => {
           (async () => {
             const TARGET_SAMPLE_RATE = 16000;
-            const BUFFER_SIZE = 4096;
             (window as any).logBot("[Bridge Audio] Starting direct WebRTC audio capture...");
 
             // Wait for WebRTC streams to appear (set by RTCPeerConnection hook in join.ts)
@@ -386,28 +385,25 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
             }
             merger.connect(gainNode);
 
-            // Use ScriptProcessorNode to capture raw PCM and resample to 16kHz
-            const scriptNode = audioCtx.createScriptProcessor(BUFFER_SIZE, 1, 1);
+            // ScriptProcessorNode for capture + resample to 16kHz.
+            // Larger buffer (8192) reduces chance of drops on busy UI thread.
+            const scriptNode = audioCtx.createScriptProcessor(8192, 1, 1);
             const ratio = nativeSR / TARGET_SAMPLE_RATE;
             let chunkCount = 0;
 
-            // Pre-compute a simple low-pass FIR filter for anti-aliasing before downsampling.
-            // Sinc-windowed (Hann) kernel, cutoff at target_rate/native_rate.
-            const FILTER_LEN = 15;
+            // 31-tap sinc-windowed (Hann) anti-aliasing FIR filter for quality downsampling.
+            const FILTER_LEN = 31;
             const filterKernel = new Float32Array(FILTER_LEN);
             const cutoff = TARGET_SAMPLE_RATE / nativeSR;
             const halfLen = (FILTER_LEN - 1) / 2;
             let filterSum = 0;
             for (let i = 0; i < FILTER_LEN; i++) {
               const n = i - halfLen;
-              // sinc
               const sinc = n === 0 ? 1.0 : Math.sin(Math.PI * 2 * cutoff * n) / (Math.PI * n);
-              // Hann window
               const window_val = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (FILTER_LEN - 1)));
               filterKernel[i] = sinc * window_val;
               filterSum += filterKernel[i];
             }
-            // Normalize
             for (let i = 0; i < FILTER_LEN; i++) filterKernel[i] /= filterSum;
 
             // Reusable base64 encoding helper (avoids JSON serialization of number arrays)
@@ -430,30 +426,32 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
               for (let i = 0; i < outputLength; i++) {
                 const center = i * ratio;
                 let sample = 0;
+                const baseIdx = Math.round(center) - halfLen;
                 for (let k = 0; k < FILTER_LEN; k++) {
-                  const srcIdx = Math.round(center) - halfLen + k;
+                  const srcIdx = baseIdx + k;
                   const s = (srcIdx >= 0 && srcIdx < inputData.length) ? inputData[srcIdx] : 0;
                   sample += s * filterKernel[k];
                 }
-                // Clamp to prevent clipping from gain boost
                 output[i] = Math.max(-1.0, Math.min(1.0, sample));
               }
 
-              // Send as base64 binary (much faster than JSON number array)
               const bridgeFn = (window as any).__vexaBridgeSendAudio;
               if (typeof bridgeFn === 'function') {
                 bridgeFn(float32ToBase64(output));
               }
 
-              // Compute RMS — log periodically or when speech detected
-              let rms = 0;
-              for (let i = 0; i < output.length; i++) rms += output[i] * output[i];
-              rms = Math.sqrt(rms / output.length);
-
               chunkCount++;
-              // Log every 500 chunks (~43s) for status, or on speech
-              if (chunkCount % 500 === 0) {
-                (window as any).logBot(`[Bridge Audio] chunk=${chunkCount} RMS=${rms.toFixed(6)} gain=${gainNode.gain.value}`);
+              // Log every 500 chunks + also log first 5 chunks for early diagnostics
+              if (chunkCount <= 5 || chunkCount % 500 === 0) {
+                // RMS of raw input (before filter)
+                let inputRms = 0;
+                for (let j = 0; j < inputData.length; j++) inputRms += inputData[j] * inputData[j];
+                inputRms = Math.sqrt(inputRms / inputData.length);
+                // RMS of resampled output
+                let rms = 0;
+                for (let i = 0; i < output.length; i++) rms += output[i] * output[i];
+                rms = Math.sqrt(rms / output.length);
+                (window as any).logBot(`[Bridge Audio] chunk=${chunkCount} inputRMS=${inputRms.toFixed(6)} outputRMS=${rms.toFixed(6)} gain=${gainNode.gain.value} inputLen=${inputData.length} outputLen=${output.length}`);
               }
             };
 

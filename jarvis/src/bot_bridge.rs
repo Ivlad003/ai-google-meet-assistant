@@ -169,7 +169,18 @@ async fn handle_socket(socket: WebSocket, state: Arc<BridgeState>) {
                     .chunks_exact(4)
                     .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                     .collect();
-                let _ = state.audio_tx.send(samples).await;
+                // Log first few audio frames and periodically for diagnostics
+                static BINARY_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                let count = BINARY_COUNT.fetch_add(1, Ordering::Relaxed);
+                if count < 5 || count % 1000 == 0 {
+                    let rms: f32 = if samples.is_empty() { 0.0 } else {
+                        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+                    };
+                    tracing::info!("[bridge] binary audio frame #{}: {} bytes, {} samples, RMS={:.6}", count, bytes.len(), samples.len(), rms);
+                }
+                if let Err(e) = state.audio_tx.send(samples).await {
+                    tracing::warn!("[bridge] audio_tx send failed: {}", e);
+                }
             }
             Message::Close(_) => break,
             _ => {}

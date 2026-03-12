@@ -15,6 +15,75 @@ mod tools;
 mod transcription;
 mod tts;
 
+/// Repair WAV files that have zero-length headers but actual audio data.
+/// This happens when the process is killed (SIGKILL) before finalize() runs.
+fn repair_wav_files(sessions_dir: &std::path::Path) {
+    use std::io::{Read, Seek, Write};
+
+    let entries = match std::fs::read_dir(sessions_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("wav") {
+            continue;
+        }
+
+        let file_size = match std::fs::metadata(&path) {
+            Ok(m) => m.len(),
+            Err(_) => continue,
+        };
+
+        // Only check files larger than the 44-byte header
+        if file_size <= 44 {
+            continue;
+        }
+
+        // Read the RIFF size field (bytes 4-7) and data size field (bytes 40-43)
+        let mut file = match std::fs::OpenOptions::new().read(true).write(true).open(&path) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+
+        let mut header = [0u8; 44];
+        if file.read_exact(&mut header).is_err() {
+            continue;
+        }
+
+        // Verify RIFF and WAVE markers
+        if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
+            continue;
+        }
+
+        let riff_size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
+        let data_size = u32::from_le_bytes([header[40], header[41], header[42], header[43]]);
+
+        // If both sizes are zero but file has data, repair the header
+        if riff_size == 0 && data_size == 0 {
+            let actual_data_size = (file_size - 44) as u32;
+            let actual_riff_size = actual_data_size + 36; // 44 - 8 = 36
+
+            if file.seek(std::io::SeekFrom::Start(4)).is_err() {
+                continue;
+            }
+            let _ = file.write_all(&actual_riff_size.to_le_bytes());
+
+            if file.seek(std::io::SeekFrom::Start(40)).is_err() {
+                continue;
+            }
+            let _ = file.write_all(&actual_data_size.to_le_bytes());
+
+            tracing::info!(
+                "Repaired WAV header: {} ({} bytes of audio data)",
+                path.display(),
+                actual_data_size
+            );
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "jarvis", about = "AI Meeting Assistant")]
 struct Args {
@@ -107,6 +176,10 @@ async fn main() -> anyhow::Result<()> {
     // Create session transcript and audio files
     let sessions_dir = cfg.data_dir.join("sessions");
     std::fs::create_dir_all(&sessions_dir).ok();
+
+    // Repair any WAV files left with broken headers from previous hard kills
+    repair_wav_files(&sessions_dir);
+
     let session_ts = chrono::Local::now().format("%Y-%m-%d_%H%M%S");
     let session_transcript_path = sessions_dir.join(format!("{}.txt", session_ts));
     let session_audio_path = sessions_dir.join(format!("{}.wav", session_ts));
@@ -133,9 +206,8 @@ async fn main() -> anyhow::Result<()> {
     // Create process manager
     let bot_process = Arc::new(Mutex::new(process::VexaBotProcess::new()));
 
-    // Watch channels for runtime config propagation and cooperative shutdown
+    // Watch channel for runtime config propagation
     let (response_mode_tx, response_mode_rx) = tokio::sync::watch::channel(cfg.response_mode.clone());
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
     // Create AppState and start web server
     let app_state = Arc::new(server::AppState {
@@ -145,7 +217,6 @@ async fn main() -> anyhow::Result<()> {
         agent: agent.clone(),
         bot_process: bot_process.clone(),
         response_mode_tx,
-        shutdown_tx: shutdown_tx.clone(),
     });
 
     let web_router = server::router(app_state);
@@ -169,21 +240,14 @@ async fn main() -> anyhow::Result<()> {
     let wav_writer_clone = wav_writer.clone();
     let tools_list = Arc::new(cfg.tools.clone());
     let http_client = Arc::new(reqwest::Client::new());
-    let mut response_mode_rx = response_mode_rx;
-    let mut shutdown_rx = shutdown_rx;
+    let response_mode_rx = response_mode_rx;
     let audio_task = tokio::spawn(async move {
         let mut audio_rx = bridge_for_tx.audio_rx.lock().await;
         let mut buffer: Vec<f32> = Vec::new();
         let chunk_size = 16000 * 3; // 3 seconds at 16kHz
+        let mut total_samples_written: u64 = 0;
 
-        loop {
-            let samples = tokio::select! {
-                s = audio_rx.recv() => match s {
-                    Some(samples) => samples,
-                    None => break,
-                },
-                _ = shutdown_rx.changed() => break,
-            };
+        while let Some(samples) = audio_rx.recv().await {
             // Write all audio samples to WAV file
             {
                 let mut writer = wav_writer_clone.lock().await;
@@ -191,6 +255,11 @@ async fn main() -> anyhow::Result<()> {
                     let sample_i16 = (s * 32767.0).clamp(-32768.0, 32767.0) as i16;
                     let _ = writer.write_sample(sample_i16);
                 }
+                total_samples_written += samples.len() as u64;
+            }
+            // Log first few receives and periodically
+            if total_samples_written == samples.len() as u64 || total_samples_written % (16000 * 30) < samples.len() as u64 {
+                tracing::info!("[audio] total samples written to WAV: {} ({:.1}s)", total_samples_written, total_samples_written as f64 / 16000.0);
             }
 
             buffer.extend_from_slice(&samples);
@@ -391,7 +460,20 @@ async fn main() -> anyhow::Result<()> {
     }
 
     tracing::info!("Jarvis running. Press Ctrl+C to stop.");
+
+    // Listen for both SIGINT (Ctrl+C) and SIGTERM (pkill, docker stop, etc.)
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate())?;
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = sigterm.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
     tokio::signal::ctrl_c().await?;
+
     tracing::info!("Shutting down...");
 
     // Stop vexa-bot on shutdown
@@ -399,12 +481,11 @@ async fn main() -> anyhow::Result<()> {
         let _ = proc.stop();
     }
 
-    // Signal audio task to shut down cooperatively
-    let _ = shutdown_tx.send(true);
-    // Wait for audio task to exit (drops its Arc<wav_writer> clone)
+    // Abort the audio task so it drops its Arc<wav_writer> clone
+    audio_task.abort();
     let _ = audio_task.await;
 
-    // Finalize WAV file (write header with correct data length)
+    // Finalize WAV file — try explicit finalize, otherwise Drop handles it
     match Arc::try_unwrap(wav_writer) {
         Ok(writer) => {
             let writer = writer.into_inner();
@@ -414,8 +495,10 @@ async fn main() -> anyhow::Result<()> {
                 tracing::info!("Audio file finalized: {}", session_audio_path.display());
             }
         }
-        Err(_) => {
-            tracing::warn!("Could not finalize WAV file — other references still held");
+        Err(arc) => {
+            // Drop the Arc — WavWriter::drop() calls finalize() automatically
+            tracing::info!("Finalizing WAV via drop...");
+            drop(arc);
         }
     }
 

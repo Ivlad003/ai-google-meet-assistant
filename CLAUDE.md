@@ -11,8 +11,8 @@ A desktop AI meeting assistant. **Jarvis** (Rust) is the core app — it runs a 
 ```
 jarvis/                    Rust desktop app
   src/
-    main.rs                Entry point — CLI args, wiring, audio processing loop, WAV recording
-    config.rs              Config from JSON file / env / CLI args
+    main.rs                Entry point — config loading, wiring, audio processing loop, WAV recording
+    config.rs              Config from JSON file with defaults
     server.rs              Axum web server — Web UI, REST API, WebSocket
     bot_bridge.rs          WebSocket bridge to vexa-bot (audio + commands + speaker tracking)
     process.rs             Manages vexa-bot child process (start/stop/find)
@@ -22,6 +22,7 @@ jarvis/                    Rust desktop app
       local.rs             whisper-rs (local) transcriber
     llm.rs                 OpenAI chat — intent detection + response generation
     tts.rs                 OpenAI TTS synthesis
+    tools.rs               Custom tool integrations (curl, etc.)
     db.rs                  SQLite for settings/history
     assets/index.html      Embedded Web UI
 
@@ -73,70 +74,23 @@ Google Meet -> Playwright Chromium -> RTCPeerConnection hook
   -> WebRTC replaceTrack -> Meeting audio output
 ```
 
-### Bridge Mode Chrome Flags
+For bridge mode flags, technical implementation details, session output files, and full configuration reference, see @docs/technical-details.md
 
-- `--mute-audio` — prevents Chrome audio output (no echo)
-- `--use-fake-device-for-media-stream` — prevents real mic capture (no feedback loop)
-- `--use-file-for-fake-audio-capture=/dev/null` — silence as mic input
+## Conventions
 
-### Key Technical Details
+### Rust (Jarvis)
+- Error handling: `anyhow::Result` with `.context()` for meaningful errors
+- Logging: `tracing` macros (`info!`, `debug!`, `warn!`, `error!`)
+- Async runtime: Tokio with `#[tokio::main]`
+- HTTP client: `reqwest`
+- Audio: `hound` crate for WAV I/O
+- Config: `serde_json` deserialization into typed structs
 
-- **RTCPeerConnection hook** (join.ts) — patches `RTCPeerConnection` before page load to capture remote audio tracks into `__vexaCapturedRemoteAudioStreams`
-- **Silence detection** (transcription/mod.rs) — RMS threshold (0.005) filters silence before Whisper, preventing hallucinations
-- **Hallucination filter** (transcription/mod.rs) — catches repeated words, YouTube/podcast outros (EN/UK/RU), music markers, short alphanumeric fragments
-- **HTTP error handling** — cloud.rs and local.rs validate HTTP status codes before processing responses
-- **Bridge mode detection** — `process.env.BRIDGE_URL` via `isBridgeMode()`, not `bridgeClient` (set later)
-- **Meeting monitoring** — bridge mode keeps recording promise pending via participant counting loop
-- **Speaker detection** — bridge mode polls participant tiles for speaking indicators via `__vexaBridgeSpeakerEvent`, tracks last speaker in `BridgeState.current_speaker`
-- **Audio recording** — all incoming audio saved to WAV file via `hound` crate (16kHz mono 16-bit PCM)
-- **Session transcripts** — each session writes `[HH:MM:SS] [Speaker] text` to a `.txt` file
-- **File logging** — `tracing-appender` writes daily rotated logs alongside console output
-
-### Session Output Files
-
-All saved to `~/Library/Application Support/jarvis/` (macOS):
-
-- `sessions/YYYY-MM-DD_HHMMSS.txt` — transcript with timestamps and speaker names
-- `sessions/YYYY-MM-DD_HHMMSS.wav` — full audio recording
-- `logs/jarvis.log.YYYY-MM-DD` — daily rotated log files
-
-On shutdown, paths are printed to terminal.
-
-## Configuration
-
-All settings in `jarvis.config.json`. Loads from current directory by default.
-
-```bash
-# Default (loads ./jarvis.config.json)
-./jarvis/target/debug/jarvis
-
-# Custom path
-./jarvis/target/debug/jarvis --config /path/to/config.json
-
-# Or via env var
-JARVIS_CONFIG=/path/to/config.json ./jarvis/target/debug/jarvis
-```
-
-See `jarvis.config.example.json` for all options.
-
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `openai_key` | **Yes** | — | OpenAI API key |
-| `meet_url` | No | — | Meeting URL (can set via Web UI) |
-| `bot_name` | No | `Jarvis` | Bot display name |
-| `language` | No | `auto` | Transcription language (en, uk, auto) |
-| `openai_model` | No | `gpt-5.4` | LLM model for responses |
-| `intent_model` | No | `gpt-5` | Intent detection model (uses reasoning_effort=minimal) |
-| `tts_voice` | No | `nova` | OpenAI TTS voice |
-| `transcription_mode` | No | `cloud` | `cloud` (OpenAI API) or `local` (whisper-rs) |
-| `whisper_model` | No | `small` | Local whisper model name |
-| `port` | No | `8080` | Web UI port |
-| `bridge_port` | No | `9090` | Bridge WebSocket port |
-| `max_response_tokens` | No | `150` | Max tokens in LLM response |
-| `temperature` | No | `0.7` | LLM temperature |
-| `system_prompt` | No | built-in | Custom system prompt |
-| `intent_prompt` | No | built-in | Custom intent prompt (`{bot_name}`, `{context}`, `{speaker}`, `{text}`) |
-| `tools` | No | `[]` | Custom tool integrations |
+### TypeScript (vexa-bot)
+- Build: always `npm run build` (esbuild bundles `browser-utils.global.js`)
+- DOM selectors: `aria-label`, `data-*`, text-based — never `jsname`
+- Browser automation: `playwright-extra` with stealth plugin
+- Languages in UI matching: English and Ukrainian only, never Russian
 
 ## Key Constraints
 
