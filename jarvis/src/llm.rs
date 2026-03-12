@@ -63,6 +63,45 @@ pub struct LlmAgent {
     transcript: Mutex<Vec<String>>,
 }
 
+/// Check if `needle` appears at a word boundary in `haystack`.
+/// For ASCII: checks that chars before/after needle are non-alphanumeric.
+/// For Cyrillic: checks that chars before/after are whitespace or punctuation.
+fn contains_at_word_boundary(haystack: &str, needle: &str) -> bool {
+    let h = haystack.to_lowercase();
+    let n = needle.to_lowercase();
+    let mut start = 0;
+    while let Some(pos) = h[start..].find(&n) {
+        let abs_pos = start + pos;
+        let end_pos = abs_pos + n.len();
+
+        let before_ok = if abs_pos == 0 {
+            true
+        } else {
+            h[..abs_pos]
+                .chars()
+                .last()
+                .map(|c| !c.is_alphanumeric())
+                .unwrap_or(true)
+        };
+
+        let after_ok = if end_pos >= h.len() {
+            true
+        } else {
+            h[end_pos..]
+                .chars()
+                .next()
+                .map(|c| !c.is_alphanumeric())
+                .unwrap_or(true)
+        };
+
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs_pos + n.len().max(1);
+    }
+    false
+}
+
 impl LlmAgent {
     pub fn new(
         api_key: &str,
@@ -122,6 +161,62 @@ impl LlmAgent {
             let drain = t.len() - 50;
             t.drain(..drain);
         }
+    }
+
+    /// Check if the bot name is mentioned in the text using word-boundary matching.
+    /// Used in "name_only" response mode to skip LLM intent detection.
+    pub fn name_mentioned(&self, text: &str) -> bool {
+        let variants = [
+            self.bot_name.as_str(),
+            "jarvis",
+            "джарвіс",
+            "джарвис",
+            "джарвіз",
+            "jarves",
+            "ві джарвіс",
+            "ай джарвіс",
+            "preview jones",
+        ];
+
+        variants.iter().any(|v| contains_at_word_boundary(text, v))
+    }
+
+    /// Remove the bot name variant from text and trim, giving the LLM a clean question.
+    /// Example: "Джарвіс, підсумуй зустріч" → "підсумуй зустріч"
+    pub fn strip_bot_name(&self, text: &str) -> String {
+        let lower = text.to_lowercase();
+        let variants = [
+            self.bot_name.to_lowercase(),
+            "jarvis".to_string(),
+            "джарвіс".to_string(),
+            "джарвис".to_string(),
+            "джарвіз".to_string(),
+            "jarves".to_string(),
+            "ві джарвіс".to_string(),
+            "ай джарвіс".to_string(),
+            "preview jones".to_string(),
+        ];
+
+        let mut result = text.to_string();
+        for variant in &variants {
+            if let Some(pos) = lower.find(variant.as_str()) {
+                let byte_end = pos + variant.len();
+                // Remove the variant and clean up surrounding punctuation/whitespace
+                result = format!("{}{}", &text[..pos], &text[byte_end..]);
+                result = result.trim_matches(|c: char| c.is_whitespace() || c == ',').trim().to_string();
+                break;
+            }
+        }
+        if result.is_empty() {
+            text.trim().to_string()
+        } else {
+            result
+        }
+    }
+
+    /// Return the number of transcript entries (for empty-transcript guards).
+    pub fn transcript_len(&self) -> usize {
+        self.transcript.lock().unwrap().len()
     }
 
     /// Add a tool execution result to conversation history so the LLM
