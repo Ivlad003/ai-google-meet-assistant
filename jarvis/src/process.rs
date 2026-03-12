@@ -19,6 +19,9 @@ impl VexaBotProcess {
         bridge_url: &str,
         meet_url: &str,
         bot_name: &str,
+        record_video: bool,
+        video_output_path: &str,
+        ffmpeg_available: bool,
     ) -> anyhow::Result<()> {
         if self.is_running() {
             self.stop()?;
@@ -68,6 +71,9 @@ impl VexaBotProcess {
             .env("BOT_CONFIG", bot_config.to_string())
             .env("BRIDGE_URL", bridge_url)
             .env("HEADLESS", &headless)
+            .env("RECORD_VIDEO", if record_video { "true" } else { "false" })
+            .env("VIDEO_OUTPUT_PATH", video_output_path)
+            .env("FFMPEG_AVAILABLE", if ffmpeg_available { "true" } else { "false" })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
