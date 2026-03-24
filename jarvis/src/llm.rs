@@ -56,6 +56,7 @@ pub struct LlmAgent {
     model: String,
     intent_model: String,
     bot_name: String,
+    language: String,
     intent_prompt: Option<String>,
     max_response_tokens: u32,
     temperature: f32,
@@ -102,12 +103,23 @@ fn contains_at_word_boundary(haystack: &str, needle: &str) -> bool {
     false
 }
 
+/// Build a language instruction string from the config language code.
+fn language_instruction(language: &str) -> String {
+    match language {
+        "uk" => "IMPORTANT: Respond ONLY in Ukrainian. NEVER respond in Russian.".to_string(),
+        "en" => "IMPORTANT: Respond ONLY in English.".to_string(),
+        "auto" => "IMPORTANT: Respond in the same language the user is speaking. NEVER respond in Russian.".to_string(),
+        other => format!("IMPORTANT: Respond ONLY in the language with code \"{}\". NEVER respond in Russian.", other),
+    }
+}
+
 impl LlmAgent {
     pub fn new(
         api_key: &str,
         model: &str,
         bot_name: &str,
         intent_model: &str,
+        language: &str,
         system_prompt: Option<&str>,
         intent_prompt: Option<String>,
         max_response_tokens: u32,
@@ -116,13 +128,14 @@ impl LlmAgent {
     ) -> Self {
         let tools_prompt_str = crate::tools::tools_prompt(tools);
 
-        let system_msg = system_prompt.map(|s| format!("{}{}", s, tools_prompt_str)).unwrap_or_else(|| {
+        let lang_instruction = language_instruction(language);
+        let system_msg = system_prompt.map(|s| format!("{}\n{}{}", s, lang_instruction, tools_prompt_str)).unwrap_or_else(|| {
             format!(
                 "You are {}, an AI meeting assistant in a Google Meet call.\n\
                  You respond when participants address you directly.\n\
                  Keep responses concise (1-3 sentences).\n\
-                 IMPORTANT: Respond ONLY in English or Ukrainian. NEVER respond in Russian.{}",
-                bot_name, tools_prompt_str
+                 {}{}",
+                bot_name, lang_instruction, tools_prompt_str
             )
         });
 
@@ -132,6 +145,7 @@ impl LlmAgent {
             model: model.to_string(),
             intent_model: intent_model.to_string(),
             bot_name: bot_name.to_string(),
+            language: language.to_string(),
             intent_prompt,
             max_response_tokens,
             temperature,
@@ -410,14 +424,16 @@ impl LlmAgent {
         success: bool,
         output: &str,
     ) -> anyhow::Result<String> {
+        let lang_instruction = language_instruction(&self.language);
         let prompt = format!(
             "You executed the tool \"{}\" and it {}.\n\
              Raw output:\n{}\n\n\
              Summarize this result in 1-2 concise sentences for speaking aloud in a meeting.\n\
-             IMPORTANT: Respond ONLY in English or Ukrainian. NEVER respond in Russian.",
+             {}",
             tool_name,
             if success { "succeeded" } else { "failed" },
-            output
+            output,
+            lang_instruction
         );
         self.chat_once(&self.model, &prompt, Some(0.3), 500, None).await
     }
@@ -429,9 +445,10 @@ impl LlmAgent {
             t.join("\n")
         };
 
+        let lang_instruction = language_instruction(&self.language);
         let prompt = format!(
-            "Provide a brief meeting summary (3-5 bullet points) based on:\n{}",
-            transcript
+            "Provide a brief meeting summary (3-5 bullet points) based on:\n{}\n\n{}",
+            transcript, lang_instruction
         );
 
         self.chat_once(&self.model, &prompt, Some(0.7), 1000, None).await

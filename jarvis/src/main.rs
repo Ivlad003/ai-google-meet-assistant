@@ -174,6 +174,7 @@ async fn main() -> anyhow::Result<()> {
         &cfg.openai_model,
         &cfg.bot_name,
         &cfg.intent_model,
+        &cfg.language,
         cfg.system_prompt.as_deref(),
         cfg.intent_prompt.clone(),
         cfg.max_response_tokens,
