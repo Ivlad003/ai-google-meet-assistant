@@ -55,9 +55,9 @@ impl VexaBotProcess {
             "nativeMeetingId": native_id,
             "redisUrl": "redis://unused:6379",
             "automaticLeave": {
-                "waitingRoomTimeout": 120,
-                "noOneJoinedTimeout": 300,
-                "everyoneLeftTimeout": 60
+                "waitingRoomTimeout": 120000,
+                "noOneJoinedTimeout": 300000,
+                "everyoneLeftTimeout": 60000
             },
             "meeting_id": 1,
             "voiceAgentEnabled": true,

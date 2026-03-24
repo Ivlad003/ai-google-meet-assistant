@@ -984,6 +984,9 @@ export class ScreenContentService {
 export function getVirtualCameraInitScript(): string {
   return `
     (() => {
+      // Only run in the top-level frame — iframes don't need the virtual camera
+      // and each instance creates a 1920x1080 canvas + captureStream(30) that wastes memory.
+      if (window !== window.top) return;
       console.log('[Vexa] Virtual camera init script START in: ' + window.location.href);
       try {
       // ===== 1. Create the canvas and stream eagerly =====
