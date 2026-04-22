@@ -509,3 +509,60 @@ impl LlmAgent {
             .unwrap_or_default())
     }
 }
+
+/// Standalone chat function that makes a direct OpenAI API call without using
+/// the live LlmAgent's history. Useful for one-off queries (e.g. session Q&A).
+pub async fn chat_with_context(
+    api_key: &str,
+    model: &str,
+    system_prompt: &str,
+    messages: Vec<(String, String)>,
+    temperature: f32,
+    max_tokens: u32,
+) -> anyhow::Result<String> {
+    let is_reasoning = crate::config::is_reasoning_model(model);
+
+    let mut chat_messages = vec![ChatMessage {
+        role: "system".to_string(),
+        content: system_prompt.to_string(),
+    }];
+    for (role, content) in messages {
+        chat_messages.push(ChatMessage { role, content });
+    }
+
+    let req = ChatRequest {
+        model: model.to_string(),
+        messages: chat_messages,
+        temperature: if is_reasoning { None } else { Some(temperature) },
+        max_completion_tokens: if is_reasoning { max_tokens.max(1000) } else { max_tokens },
+        reasoning_effort: if is_reasoning { Some("low".to_string()) } else { None },
+    };
+
+    let client = Client::new();
+    let resp = client
+        .post("https://api.openai.com/v1/chat/completions")
+        .bearer_auth(api_key)
+        .json(&req)
+        .send()
+        .await?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+
+    if !status.is_success() {
+        let api_msg = serde_json::from_str::<ApiErrorResponse>(&body)
+            .ok()
+            .and_then(|r| r.error)
+            .map(|e| e.message)
+            .unwrap_or_else(|| body.clone());
+        anyhow::bail!("OpenAI API error (HTTP {}): {}", status, api_msg);
+    }
+
+    let chat_resp: ChatResponse = serde_json::from_str(&body)?;
+
+    Ok(chat_resp
+        .choices
+        .first()
+        .map(|c| c.message.content.as_deref().unwrap_or("").trim().to_string())
+        .unwrap_or_default())
+}

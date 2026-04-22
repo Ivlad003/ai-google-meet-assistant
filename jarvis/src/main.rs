@@ -245,6 +245,8 @@ async fn main() -> anyhow::Result<()> {
         agent: agent.clone(),
         bot_process: bot_process.clone(),
         response_mode_tx,
+        data_dir: cfg.data_dir.clone(),
+        openai_key: cfg.openai_key.clone(),
     });
 
     let web_router = server::router(app_state);
