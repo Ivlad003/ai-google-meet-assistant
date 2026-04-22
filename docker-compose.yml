@@ -25,6 +25,12 @@ services:
       - AUTH_HASH=${AUTH_HASH:-}
       - RUST_LOG=${RUST_LOG:-jarvis=info}
     stop_grace_period: 30s
+    networks:
+      - dokploy-network
 
 volumes:
   jarvis-data:
+
+networks:
+  dokploy-network:
+    external: true
