@@ -4,6 +4,12 @@
 # For local/IP-only access without HTTPS, use:
 #   :80
 #
+# IMPORTANT: Set CADDY_AUTH_USER and CADDY_AUTH_HASH in .env
+# Generate a password hash: docker run --rm caddy:2-alpine caddy hash-password --plaintext 'your-password'
+#
 your-domain.com {
+	basicauth {
+		{$CADDY_AUTH_USER:admin} {$CADDY_AUTH_HASH}
+	}
 	reverse_proxy jarvis:8080
 }

@@ -19,6 +19,7 @@ services:
       - TTS_VOICE=${TTS_VOICE:-}
       - RESPONSE_MODE=${RESPONSE_MODE:-}
       - RUST_LOG=${RUST_LOG:-jarvis=info}
+    stop_grace_period: 30s
     networks:
       - jarvis-net
 
@@ -29,6 +30,9 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    environment:
+      - CADDY_AUTH_USER=${CADDY_AUTH_USER:-admin}
+      - CADDY_AUTH_HASH=${CADDY_AUTH_HASH}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

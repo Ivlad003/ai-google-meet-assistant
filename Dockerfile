@@ -52,14 +52,13 @@ RUN npm run build
 # =============================================================================
 FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS runtime
 
-# Install system dependencies
+# Install system dependencies (no fluxbox — not started, just dead weight)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
     ffmpeg \
     pulseaudio \
     x11-utils \
     x11-xserver-utils \
-    fluxbox \
     jq \
     && rm -rf /var/lib/apt/lists/*
 
@@ -78,15 +77,17 @@ COPY --from=ts-builder /build/vexa-bot/core/build-browser-utils.js /app/vexa-bot
 RUN cd /app/vexa-bot/core && npx playwright install --with-deps chromium \
     && rm -rf /tmp/*
 
-# Create data directories
+# Create data directories with proper ownership for non-root user (pwuser = UID 1001)
 RUN mkdir -p /data/jarvis/sessions /data/jarvis/logs /app/storage/screenshots /app/storage/logs /app/storage/temp \
-    && chmod -R 777 /data /app/storage
+    && chown -R pwuser:pwuser /data /app/storage /app/jarvis /app/vexa-bot /app/entrypoint.sh 2>/dev/null || true
 
 # Copy entrypoint and default config
 COPY docker/entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh \
+    && chown -R pwuser:pwuser /app
 
 COPY jarvis.config.example.json /app/default-config.json
+RUN chown pwuser:pwuser /app/default-config.json
 
 # Environment
 ENV DISPLAY=:99
@@ -94,10 +95,15 @@ ENV DOCKER_MODE=1
 ENV VEXA_BOT_DIR=/app/vexa-bot
 ENV JARVIS_DATA_DIR=/data/jarvis
 ENV JARVIS_CONFIG=/etc/jarvis/config.json
+ENV HOME=/home/pwuser
 
+# Bridge port 9090 is internal-only (Jarvis <-> vexa-bot within same container)
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -f http://localhost:8080/ || exit 1
+    CMD curl -f http://localhost:8080/ && xdpyinfo -display :99 >/dev/null 2>&1 || exit 1
+
+# Entrypoint runs as root to start Xvfb/PulseAudio, then drops to pwuser via gosu
+RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
 
 ENTRYPOINT ["/app/entrypoint.sh"]
