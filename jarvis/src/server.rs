@@ -32,6 +32,7 @@ pub struct AppState {
     pub response_mode_tx: tokio::sync::watch::Sender<crate::config::ResponseMode>,
     pub data_dir: std::path::PathBuf,
     pub openai_key: String,
+    pub http_client: reqwest::Client,
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -324,7 +325,7 @@ Rules:
         .collect();
     messages.push(("user".to_string(), req.prompt));
 
-    match crate::llm::chat_with_context(&state.openai_key, &model, system, messages, 0.7, 1000).await {
+    match crate::llm::chat_with_context(&state.openai_key, &state.http_client, &model, system, messages, 0.7, 1000).await {
         Ok(reply) => {
             // Try to parse as JSON tool definition
             match serde_json::from_str::<serde_json::Value>(&reply) {

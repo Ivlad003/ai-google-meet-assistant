@@ -231,6 +231,7 @@ async fn main() -> anyhow::Result<()> {
         response_mode_tx,
         data_dir: cfg.data_dir.clone(),
         openai_key: cfg.openai_key.clone(),
+        http_client: reqwest::Client::new(),
     });
 
     let web_router = server::router(app_state);

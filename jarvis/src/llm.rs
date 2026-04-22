@@ -514,6 +514,7 @@ impl LlmAgent {
 /// the live LlmAgent's history. Useful for one-off queries (e.g. session Q&A).
 pub async fn chat_with_context(
     api_key: &str,
+    client: &Client,
     model: &str,
     system_prompt: &str,
     messages: Vec<(String, String)>,
@@ -538,7 +539,6 @@ pub async fn chat_with_context(
         reasoning_effort: if is_reasoning { Some("low".to_string()) } else { None },
     };
 
-    let client = Client::new();
     let resp = client
         .post("https://api.openai.com/v1/chat/completions")
         .bearer_auth(api_key)
