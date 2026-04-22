@@ -242,6 +242,9 @@ async fn main() -> anyhow::Result<()> {
         data_dir: cfg.data_dir.clone(),
         openai_key: cfg.openai_key.clone(),
         http_client: reqwest::Client::new(),
+        auth_enabled: cfg.auth_enabled,
+        auth_user: cfg.auth_user.clone(),
+        auth_hash: cfg.auth_hash.clone(),
     });
 
     let web_router = server::router(app_state);

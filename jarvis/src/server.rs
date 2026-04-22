@@ -3,8 +3,9 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         State,
     },
-    http::StatusCode,
-    response::{Html, IntoResponse, Json},
+    http::{Request, StatusCode},
+    middleware::Next,
+    response::{Html, IntoResponse, Json, Response},
     routing::{get, post},
     Router,
 };
@@ -33,11 +34,14 @@ pub struct AppState {
     pub data_dir: std::path::PathBuf,
     pub openai_key: String,
     pub http_client: reqwest::Client,
+    pub auth_enabled: bool,
+    pub auth_user: String,
+    pub auth_hash: String,
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
     let sessions = crate::sessions::router(state.clone());
-    Router::new()
+    let app = Router::new()
         .route("/", get(index))
         .route("/api/config", get(get_config).post(update_config))
         .route("/api/status", get(get_status))
@@ -46,8 +50,46 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/transcript", get(transcript_ws))
         .route("/api/summary", get(get_summary))
         .route("/api/tools/generate", post(generate_tool))
-        .merge(sessions)
-        .with_state(state)
+        .merge(sessions);
+
+    // Apply basic auth middleware if enabled
+    if state.auth_enabled {
+        app.layer(axum::middleware::from_fn_with_state(state.clone(), basic_auth_middleware))
+            .with_state(state)
+    } else {
+        app.with_state(state)
+    }
+}
+
+async fn basic_auth_middleware(
+    State(state): State<Arc<AppState>>,
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    if let Some(auth_header) = req.headers().get("authorization").and_then(|v| v.to_str().ok()) {
+        if let Some(credentials) = auth_header.strip_prefix("Basic ") {
+            if let Ok(decoded) = base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                credentials,
+            ) {
+                if let Ok(decoded_str) = String::from_utf8(decoded) {
+                    if let Some((user, password)) = decoded_str.split_once(':') {
+                        if user == state.auth_user
+                            && bcrypt::verify(password, &state.auth_hash).unwrap_or(false)
+                        {
+                            return next.run(req).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Response::builder()
+        .status(StatusCode::UNAUTHORIZED)
+        .header("WWW-Authenticate", "Basic realm=\"Jarvis\"")
+        .body(axum::body::Body::from("Unauthorized"))
+        .unwrap()
 }
 
 async fn index() -> impl IntoResponse {

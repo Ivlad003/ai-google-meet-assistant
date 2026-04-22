@@ -23,6 +23,9 @@ pub struct ConfigFile {
     pub record_video: Option<bool>,
     #[serde(default)]
     pub tools: Option<Vec<super::tools::ToolDef>>,
+    pub auth_enabled: Option<bool>,
+    pub auth_user: Option<String>,
+    pub auth_hash: Option<String>,
 }
 
 impl ConfigFile {
@@ -86,6 +89,9 @@ impl ConfigFile {
         if let Some(v) = env_f32("JARVIS_TEMPERATURE") { self.temperature = Some(v); }
         if let Some(v) = env_str("JARVIS_RESPONSE_MODE") { self.response_mode = Some(v); }
         if let Some(v) = env_bool("JARVIS_RECORD_VIDEO") { self.record_video = Some(v); }
+        if let Some(v) = env_str("AUTH_USER") { self.auth_user = Some(v); }
+        if let Some(v) = env_str("AUTH_HASH") { self.auth_hash = Some(v); }
+        if let Some(v) = env_bool("AUTH_ENABLED") { self.auth_enabled = Some(v); }
         // Tools from env: JSON array string
         if let Some(v) = env_str("JARVIS_TOOLS") {
             if let Ok(tools) = serde_json::from_str(&v) {
@@ -117,6 +123,9 @@ pub struct Config {
     pub response_mode: ResponseMode,
     pub record_video: bool,
     pub tools: Vec<super::tools::ToolDef>,
+    pub auth_enabled: bool,
+    pub auth_user: String,
+    pub auth_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -171,6 +180,9 @@ impl Config {
             },
             record_video: cf.record_video.unwrap_or(false),
             tools: cf.tools.clone().unwrap_or_default(),
+            auth_enabled: cf.auth_enabled.unwrap_or(false),
+            auth_user: cf.auth_user.clone().unwrap_or_else(|| "admin".to_string()),
+            auth_hash: cf.auth_hash.clone().unwrap_or_default(),
         }
     }
 }

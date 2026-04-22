@@ -24,6 +24,7 @@ uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
 anyhow = "1"
+bcrypt = "0.17"
 hound = "3.5"
 async-trait = "0.1"
 open = "5"
