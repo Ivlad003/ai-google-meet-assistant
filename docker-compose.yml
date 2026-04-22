@@ -32,8 +32,8 @@ services:
     container_name: jarvis-caddy
     restart: unless-stopped
     entrypoint: ["/bin/sh", "/app/caddy-entrypoint.sh"]
-    ports:
-      - "8080:8080"
+    expose:
+      - "8080"
     environment:
       - CADDY_AUTH_ENABLED=${CADDY_AUTH_ENABLED:-true}
       - CADDY_AUTH_USER=${CADDY_AUTH_USER:-admin}
