@@ -35,6 +35,7 @@ pub struct AppState {
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
+    let sessions = crate::sessions::router(state.clone());
     Router::new()
         .route("/", get(index))
         .route("/api/config", get(get_config).post(update_config))
@@ -43,6 +44,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/leave", post(leave_meeting))
         .route("/api/transcript", get(transcript_ws))
         .route("/api/summary", get(get_summary))
+        .route("/api/tools/generate", post(generate_tool))
+        .merge(sessions)
         .with_state(state)
 }
 
@@ -65,6 +68,8 @@ struct ConfigResponse {
     openai_model: String,
     response_mode: String,
     record_video: bool,
+    language: String,
+    tools: serde_json::Value,
 }
 
 async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigResponse> {
@@ -79,6 +84,8 @@ async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigResponse> 
             crate::config::ResponseMode::Smart => "smart".to_string(),
         },
         record_video: cfg.record_video,
+        language: cfg.language.clone(),
+        tools: serde_json::json!(cfg.tools),
     })
 }
 
@@ -90,6 +97,8 @@ struct ConfigUpdate {
     openai_model: Option<String>,
     response_mode: Option<String>,
     record_video: Option<bool>,
+    language: Option<String>,
+    tools: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -128,6 +137,16 @@ async fn update_config(
 
     if let Some(record_video) = update.record_video {
         cfg.record_video = record_video;
+    }
+
+    if let Some(language) = update.language {
+        cfg.language = language;
+    }
+
+    if let Some(tools) = update.tools {
+        if let Ok(parsed) = serde_json::from_value::<Vec<crate::tools::ToolDef>>(tools) {
+            cfg.tools = parsed;
+        }
     }
 
     Json(ConfigUpdateResponse {
@@ -253,6 +272,79 @@ async fn leave_meeting(State(state): State<Arc<AppState>>) -> Json<ActionRespons
             ok: false,
             message: format!("Failed to stop vexa-bot: {}", e),
         }),
+    }
+}
+
+// --- Tool generation endpoint ---
+
+#[derive(Deserialize)]
+struct ToolGenerateRequest {
+    prompt: String,
+    #[serde(default)]
+    history: Vec<ToolChatMsg>,
+}
+
+#[derive(Deserialize)]
+struct ToolChatMsg {
+    role: String,
+    content: String,
+}
+
+async fn generate_tool(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ToolGenerateRequest>,
+) -> Json<serde_json::Value> {
+    let model = state.config.read().await.openai_model.clone();
+
+    let system = r#"You are a tool configuration assistant for Jarvis, an AI meeting bot.
+Generate tool definitions as JSON matching this schema:
+{
+  "name": "tool_name",
+  "type": "curl",
+  "description": "What the tool does",
+  "method": "GET or POST or PUT or DELETE",
+  "url": "https://example.com/api",
+  "headers": {"Authorization": "Bearer TOKEN"},
+  "parameters": {"param_name": "description of parameter"},
+  "body_template": {"key": "{{param_name}}"},
+  "prompt_template": null,
+  "working_directory": null
+}
+
+Rules:
+- "type" is always "curl" for HTTP tools
+- "parameters" describes what the tool accepts
+- "body_template" uses {{param}} placeholders that get filled from parameters
+- Reply with ONLY valid JSON for the tool object, no markdown, no explanation outside the JSON
+- If the user asks to modify a tool, output the complete modified tool JSON"#;
+
+    let mut messages: Vec<(String, String)> = req.history
+        .iter()
+        .map(|m| (m.role.clone(), m.content.clone()))
+        .collect();
+    messages.push(("user".to_string(), req.prompt));
+
+    match crate::llm::chat_with_context(&state.openai_key, &model, system, messages, 0.7, 1000).await {
+        Ok(reply) => {
+            // Try to parse as JSON tool definition
+            match serde_json::from_str::<serde_json::Value>(&reply) {
+                Ok(tool_json) => Json(serde_json::json!({
+                    "tool": tool_json,
+                    "raw": reply
+                })),
+                Err(_) => {
+                    // LLM didn't return pure JSON, return as explanation
+                    Json(serde_json::json!({
+                        "tool": null,
+                        "raw": reply,
+                        "error": "Response was not valid JSON. You can manually edit it."
+                    }))
+                }
+            }
+        }
+        Err(e) => Json(serde_json::json!({
+            "error": format!("LLM error: {}", e)
+        })),
     }
 }
 

@@ -7,27 +7,41 @@
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #e0e0e0; min-height: 100vh; }
-  .header { background: #16213e; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #0f3460; }
+  .header { background: #16213e; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; border-bottom: none; }
   .header h1 { font-size: 20px; color: #e94560; }
   .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
   .status-dot.green { background: #4ecca3; }
   .status-dot.red { background: #e94560; }
   .status-dot.yellow { background: #f0a500; }
+
+  /* Tab navigation */
+  .tab-nav { display: flex; background: #16213e; border-bottom: 1px solid #0f3460; padding: 0 24px; }
+  .tab-nav button { background: none; border: none; color: #888; padding: 12px 20px; cursor: pointer; font-size: 14px; font-weight: 600; border-bottom: 2px solid transparent; transition: color 0.2s; }
+  .tab-nav button.active { color: #e94560; border-bottom-color: #e94560; }
+  .tab-nav button:hover { color: #e0e0e0; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* Dashboard */
   .main { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; max-width: 1200px; margin: 0 auto; }
   .panel { background: #16213e; border-radius: 8px; padding: 20px; border: 1px solid #0f3460; }
   .panel h2 { font-size: 14px; text-transform: uppercase; color: #888; margin-bottom: 16px; letter-spacing: 1px; }
   .field { margin-bottom: 14px; }
   .field label { display: block; font-size: 13px; color: #aaa; margin-bottom: 4px; }
-  .field input, .field select, .field textarea { width: 100%; padding: 8px 12px; background: #1a1a2e; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-size: 14px; }
+  .field input[type="text"], .field input[type="number"], .field select, .field textarea { width: 100%; padding: 8px 12px; background: #1a1a2e; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-size: 14px; }
   .field textarea { min-height: 200px; resize: vertical; font-family: monospace; }
   .field input:focus, .field select:focus, .field textarea:focus { outline: none; border-color: #e94560; }
-  .btn { padding: 8px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 600; }
+  .checkbox-field { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+  .checkbox-field input[type="checkbox"] { width: 16px; height: 16px; accent-color: #e94560; }
+  .checkbox-field label { font-size: 13px; color: #aaa; margin: 0; }
+  .btn { padding: 8px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 600; text-decoration: none; display: inline-block; }
   .btn-primary { background: #e94560; color: white; }
   .btn-primary:hover { background: #c73e54; }
   .btn-danger { background: #444; color: #e94560; border: 1px solid #e94560; }
   .btn-danger:hover { background: #e94560; color: white; }
   .btn-success { background: #4ecca3; color: #1a1a2e; }
   .btn-success:hover { background: #3db891; }
+  .btn-sm { padding: 4px 12px; font-size: 12px; }
   .controls { display: flex; gap: 10px; margin-top: 16px; align-items: center; }
   .status-bar { display: flex; gap: 16px; margin-top: 12px; font-size: 13px; }
   .transcript-panel { grid-column: 1 / -1; }
@@ -35,8 +49,82 @@
   .transcript-feed .line { padding: 2px 0; }
   .transcript-feed .line.bot { color: #4ecca3; }
   .transcript-feed .line.user { color: #e0e0e0; }
-  .restart-badge { background: #f0a500; color: #1a1a2e; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; margin-left: 8px; }
   .toast { position: fixed; bottom: 20px; right: 20px; background: #4ecca3; color: #1a1a2e; padding: 10px 20px; border-radius: 6px; font-weight: 600; display: none; z-index: 100; }
+
+  /* Sessions tab */
+  .sessions-layout { display: grid; grid-template-columns: 350px 1fr; gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; min-height: calc(100vh - 110px); }
+  .session-list { background: #16213e; border-radius: 8px; border: 1px solid #0f3460; overflow: hidden; display: flex; flex-direction: column; max-height: calc(100vh - 130px); }
+  .session-list-header { padding: 16px; border-bottom: 1px solid #0f3460; }
+  .session-list-header h2 { font-size: 14px; text-transform: uppercase; color: #888; letter-spacing: 1px; margin-bottom: 12px; }
+  .session-search { width: 100%; padding: 8px 12px; background: #1a1a2e; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-size: 13px; }
+  .session-search:focus { outline: none; border-color: #e94560; }
+  .session-items { flex: 1; overflow-y: auto; }
+  .session-item { padding: 12px 16px; border-bottom: 1px solid #0f3460; cursor: pointer; transition: background 0.15s; }
+  .session-item:hover { background: #1a1a2e; }
+  .session-item.active { background: #0f3460; border-left: 3px solid #e94560; }
+  .session-item .date { font-size: 13px; color: #e94560; font-weight: 600; }
+  .session-item .preview { font-size: 12px; color: #888; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-item .badges { margin-top: 4px; display: flex; gap: 6px; }
+  .session-item .badge { font-size: 10px; padding: 2px 6px; border-radius: 3px; background: #0f3460; color: #aaa; }
+  .session-empty { padding: 40px 20px; text-align: center; color: #666; font-size: 14px; }
+  .load-more-btn { width: 100%; padding: 10px; background: none; border: none; border-top: 1px solid #0f3460; color: #e94560; cursor: pointer; font-size: 13px; }
+  .load-more-btn:hover { background: #1a1a2e; }
+
+  /* Session detail */
+  .session-detail { background: #16213e; border-radius: 8px; border: 1px solid #0f3460; padding: 20px; overflow-y: auto; max-height: calc(100vh - 130px); }
+  .session-detail-empty { display: flex; align-items: center; justify-content: center; color: #666; font-size: 14px; }
+  .detail-section { margin-bottom: 20px; }
+  .detail-section h3 { font-size: 13px; color: #aaa; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .transcript-viewer { background: #0d1117; border-radius: 4px; padding: 12px; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-wrap: break-word; }
+  .download-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .download-bar .btn { font-size: 12px; padding: 6px 14px; }
+
+  /* Media players */
+  .session-detail audio { width: 100%; margin-top: 4px; }
+  .session-detail video { width: 100%; border-radius: 4px; margin-top: 4px; max-height: 400px; }
+
+  /* Chat */
+  .chat-messages { background: #0d1117; border-radius: 4px; padding: 12px; max-height: 250px; overflow-y: auto; margin-bottom: 8px; min-height: 60px; }
+  .chat-msg { margin-bottom: 8px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+  .chat-msg.user { color: #4ecca3; }
+  .chat-msg.assistant { color: #e0e0e0; }
+  .chat-msg .role { font-weight: 600; margin-right: 6px; }
+  .chat-input-row { display: flex; gap: 8px; }
+  .chat-input { flex: 1; padding: 8px 12px; background: #1a1a2e; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-size: 13px; }
+  .chat-input:focus { outline: none; border-color: #e94560; }
+
+  /* Search results */
+  .search-result-session { padding: 10px 16px; border-bottom: 1px solid #0f3460; }
+  .search-result-session .sr-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .search-result-session .sr-date { color: #e94560; font-weight: 600; font-size: 13px; cursor: pointer; }
+  .search-result-session .sr-date:hover { text-decoration: underline; }
+  .match-text { font-family: monospace; font-size: 12px; background: #0d1117; padding: 6px 8px; border-radius: 3px; margin-top: 4px; line-height: 1.5; }
+  .match-text mark { background: #e94560; color: white; padding: 0 2px; border-radius: 2px; }
+  .context-line { color: #555; }
+  .search-chat-bar { padding: 12px 16px; border-top: 1px solid #0f3460; }
+
+  /* Global chat */
+  .global-chat-bar { background: #16213e; border-radius: 8px; border: 1px solid #0f3460; padding: 16px; margin: 16px; margin-bottom: 0; max-width: 1400px; margin-left: auto; margin-right: auto; }
+  .global-chat-bar h2 { font-size: 14px; text-transform: uppercase; color: #888; letter-spacing: 1px; margin-bottom: 12px; cursor: pointer; }
+  .global-chat-bar h2:hover { color: #e94560; }
+  .global-chat-body { display: none; }
+  .global-chat-body.open { display: block; }
+
+  /* Tools tab */
+  .tools-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; min-height: calc(100vh - 110px); }
+  .tools-editor { background: #16213e; border-radius: 8px; border: 1px solid #0f3460; padding: 20px; display: flex; flex-direction: column; }
+  .tools-editor h2 { font-size: 14px; text-transform: uppercase; color: #888; letter-spacing: 1px; margin-bottom: 12px; }
+  .tools-editor textarea { flex: 1; min-height: 400px; background: #0d1117; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-family: monospace; font-size: 13px; padding: 12px; resize: vertical; }
+  .tools-editor textarea:focus { outline: none; border-color: #e94560; }
+  .tools-error { color: #e94560; font-size: 12px; margin-top: 8px; min-height: 18px; }
+  .tools-chat { background: #16213e; border-radius: 8px; border: 1px solid #0f3460; padding: 20px; display: flex; flex-direction: column; }
+  .tools-chat h2 { font-size: 14px; text-transform: uppercase; color: #888; letter-spacing: 1px; margin-bottom: 12px; }
+
+  @media (max-width: 768px) {
+    .sessions-layout, .tools-layout { grid-template-columns: 1fr; }
+    .session-list { max-height: 300px; }
+    .main { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
@@ -48,6 +136,14 @@
   </div>
 </div>
 
+<div class="tab-nav">
+  <button class="active" data-tab="dashboard" onclick="switchTab('dashboard')">Dashboard</button>
+  <button data-tab="sessions" onclick="switchTab('sessions')">Sessions</button>
+  <button data-tab="tools" onclick="switchTab('tools')">Tools</button>
+</div>
+
+<!-- Dashboard Tab -->
+<div id="tab-dashboard" class="tab-content active">
 <div class="main">
   <div class="panel">
     <h2>Settings</h2>
@@ -58,6 +154,14 @@
     <div class="field">
       <label>Bot Display Name</label>
       <input type="text" id="bot-name" placeholder="Jarvis">
+    </div>
+    <div class="field">
+      <label>Language</label>
+      <select id="language">
+        <option value="auto">Auto (match speaker)</option>
+        <option value="en">English</option>
+        <option value="uk">Ukrainian</option>
+      </select>
     </div>
     <div class="field">
       <label>TTS Voice</label>
@@ -73,9 +177,10 @@
     <div class="field">
       <label>OpenAI Model</label>
       <select id="model">
+        <option value="gpt-5.4">GPT-5.4</option>
+        <option value="gpt-5">GPT-5</option>
         <option value="gpt-4o">GPT-4o</option>
         <option value="gpt-4o-mini">GPT-4o Mini</option>
-        <option value="gpt-4-turbo">GPT-4 Turbo</option>
       </select>
     </div>
     <div class="field">
@@ -84,6 +189,10 @@
         <option value="smart">Smart (LLM intent detection)</option>
         <option value="name_only">Name Only (respond when name said)</option>
       </select>
+    </div>
+    <div class="checkbox-field">
+      <input type="checkbox" id="record-video">
+      <label for="record-video">Record Video (requires restart)</label>
     </div>
     <div class="controls">
       <button class="btn btn-primary" onclick="saveConfig()">Save &amp; Reload</button>
@@ -127,11 +236,70 @@
     </div>
   </div>
 </div>
+</div>
+
+<!-- Sessions Tab -->
+<div id="tab-sessions" class="tab-content">
+<div class="global-chat-bar">
+  <h2 onclick="toggleGlobalChat()">Global Chat (all sessions) &#9660;</h2>
+  <div class="global-chat-body" id="global-chat-body">
+    <div class="chat-messages" id="global-chat-messages"></div>
+    <div class="chat-input-row">
+      <input type="text" class="chat-input" id="global-chat-input" placeholder="Ask across all your meetings..." onkeydown="if(event.key==='Enter')sendGlobalChat()">
+      <button class="btn btn-primary" onclick="sendGlobalChat()">Send</button>
+    </div>
+  </div>
+</div>
+<div class="sessions-layout">
+  <div class="session-list">
+    <div class="session-list-header">
+      <h2>Sessions</h2>
+      <input type="text" class="session-search" id="session-search" placeholder="Search across all sessions..." onkeydown="if(event.key==='Enter')searchSessions()">
+    </div>
+    <div class="session-items" id="session-items"></div>
+    <button class="load-more-btn" id="load-more-btn" style="display:none" onclick="loadMoreSessions()">Load more</button>
+  </div>
+  <div class="session-detail session-detail-empty" id="session-detail">
+    Select a session to view details
+  </div>
+</div>
+</div>
+
+<!-- Tools Tab -->
+<div id="tab-tools" class="tab-content">
+<div class="tools-layout">
+  <div class="tools-editor">
+    <h2>Tools Configuration (JSON)</h2>
+    <textarea id="tools-json" placeholder="[]"></textarea>
+    <div class="tools-error" id="tools-error"></div>
+    <div class="controls" style="margin-top: 8px;">
+      <button class="btn btn-primary" onclick="saveTools()">Save Tools</button>
+      <button class="btn btn-success" onclick="formatToolsJson()">Format JSON</button>
+    </div>
+  </div>
+  <div class="tools-chat">
+    <h2>AI Tool Generator</h2>
+    <div class="chat-messages" id="tools-chat-messages" style="flex:1;max-height:none;"></div>
+    <div class="chat-input-row" style="margin-top:8px;">
+      <input type="text" class="chat-input" id="tools-chat-input" placeholder="Describe a tool to generate..." onkeydown="if(event.key==='Enter')generateTool()">
+      <button class="btn btn-primary" onclick="generateTool()">Generate</button>
+    </div>
+  </div>
+</div>
+</div>
 
 <div class="toast" id="toast"></div>
 
 <script>
 const $ = id => document.getElementById(id);
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function escRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 function toast(msg, ms = 2000) {
   const t = $('toast');
@@ -140,15 +308,21 @@ function toast(msg, ms = 2000) {
   setTimeout(() => t.style.display = 'none', ms);
 }
 
+// ============================================================
+// Dashboard
+// ============================================================
+
 async function loadConfig() {
   try {
     const r = await fetch('/api/config');
     const c = await r.json();
     $('meet-url').value = c.meet_url || '';
     $('bot-name').value = c.bot_display_name || '';
+    $('language').value = c.language || 'auto';
     $('tts-voice').value = c.tts_voice || 'nova';
-    $('model').value = c.openai_model || 'gpt-4o';
+    $('model').value = c.openai_model || 'gpt-5.4';
     $('response-mode').value = c.response_mode || 'smart';
+    $('record-video').checked = c.record_video || false;
   } catch(e) { console.error('loadConfig', e); }
 }
 
@@ -157,9 +331,11 @@ async function saveConfig() {
     const body = {
       meet_url: $('meet-url').value,
       bot_display_name: $('bot-name').value,
+      language: $('language').value,
       tts_voice: $('tts-voice').value,
       openai_model: $('model').value,
       response_mode: $('response-mode').value,
+      record_video: $('record-video').checked,
     };
     const r = await fetch('/api/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
     const res = await r.json();
@@ -171,8 +347,7 @@ async function joinMeeting() {
   try {
     const r = await fetch('/api/join', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({meet_url: $('meet-url').value}) });
     const res = await r.json();
-    if (res.ok) toast(res.message);
-    else toast('Join failed: ' + res.message);
+    if (res.ok) toast(res.message); else toast('Join failed: ' + res.message);
   } catch(e) { toast('Join failed: ' + e.message); }
 }
 
@@ -180,8 +355,7 @@ async function leaveMeeting() {
   try {
     const r = await fetch('/api/leave', { method: 'POST' });
     const res = await r.json();
-    if (res.ok) toast(res.message);
-    else toast('Leave failed: ' + res.message);
+    if (res.ok) toast(res.message); else toast('Leave failed: ' + res.message);
   } catch(e) { toast('Leave failed: ' + e.message); }
 }
 
@@ -189,34 +363,16 @@ async function pollStatus() {
   try {
     const r = await fetch('/api/status');
     const s = await r.json();
-
-    const bd = $('bridge-dot');
-    const bs = $('bridge-status');
-    if (s.bridge_connected) {
-      bd.className = 'status-dot green';
-      bs.textContent = 'Bridge: connected';
-    } else {
-      bd.className = 'status-dot red';
-      bs.textContent = 'Bridge: disconnected';
-    }
-
+    const bd = $('bridge-dot'), bs = $('bridge-status');
+    if (s.bridge_connected) { bd.className = 'status-dot green'; bs.textContent = 'Bridge: connected'; }
+    else { bd.className = 'status-dot red'; bs.textContent = 'Bridge: disconnected'; }
     $('status-bridge').textContent = s.bridge_connected ? 'Yes' : 'No';
     $('status-meeting').textContent = s.meeting_active ? 'Yes' : 'No';
     $('status-participants').textContent = s.participant_count;
-
-    const botDot = $('bot-dot');
-    const botStatus = $('bot-status');
-    if (s.bridge_connected) {
-      botDot.className = 'status-dot green';
-      botStatus.textContent = 'connected';
-    } else {
-      botDot.className = 'status-dot red';
-      botStatus.textContent = 'disconnected';
-    }
-  } catch(e) {
-    $('bridge-dot').className = 'status-dot red';
-    $('bridge-status').textContent = 'Bridge: unreachable';
-  }
+    const botDot = $('bot-dot'), botStatus = $('bot-status');
+    if (s.bridge_connected) { botDot.className = 'status-dot green'; botStatus.textContent = 'connected'; }
+    else { botDot.className = 'status-dot red'; botStatus.textContent = 'disconnected'; }
+  } catch(e) { $('bridge-dot').className = 'status-dot red'; $('bridge-status').textContent = 'Bridge: unreachable'; }
 }
 
 function connectTranscript() {
@@ -237,59 +393,437 @@ function connectTranscript() {
 }
 
 async function getSummary() {
-  const btn = $('summarize-btn');
-  btn.textContent = 'Generating...';
-  btn.disabled = true;
+  const btn = $('summarize-btn'); btn.textContent = 'Generating...'; btn.disabled = true;
   try {
     const r = await fetch('/api/summary');
     const res = await r.json();
     const el = $('summary-content');
-    if (res.ok) {
-      el.style.color = '#e0e0e0';
-      el.textContent = res.summary;
-      $('copy-btn').style.display = '';
-    } else {
-      el.style.color = '#e94560';
-      el.textContent = res.message;
-    }
-  } catch(e) {
-    $('summary-content').style.color = '#e94560';
-    $('summary-content').textContent = 'Failed: ' + e.message;
-  } finally {
-    btn.textContent = 'Summarize';
-    btn.disabled = false;
-  }
+    if (res.ok) { el.style.color = '#e0e0e0'; el.textContent = res.summary; $('copy-btn').style.display = ''; }
+    else { el.style.color = '#e94560'; el.textContent = res.message; }
+  } catch(e) { $('summary-content').style.color = '#e94560'; $('summary-content').textContent = 'Failed: ' + e.message; }
+  finally { btn.textContent = 'Summarize'; btn.disabled = false; }
 }
 
 function copySummary() {
   const text = $('summary-content').textContent;
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).then(() => toast('Copied to clipboard!')).catch(() => fallbackCopy(text));
-  } else {
-    fallbackCopy(text);
+  if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => toast('Copied!')).catch(() => fallbackCopy(text));
+  else fallbackCopy(text);
+}
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea'); ta.value = text; ta.style.cssText = 'position:fixed;left:-9999px';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); toast('Copied!'); } catch(e) { toast('Copy failed'); }
+  document.body.removeChild(ta);
+}
+
+// ============================================================
+// Tab System
+// ============================================================
+
+function switchTab(tab) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab-nav button').forEach(el => el.classList.remove('active'));
+  $('tab-' + tab).classList.add('active');
+  document.querySelector('.tab-nav button[data-tab="' + tab + '"]').classList.add('active');
+  if (tab === 'sessions' && !sessionsLoaded) loadSessions();
+  if (tab === 'tools' && !toolsLoaded) loadTools();
+  history.replaceState(null, '', '#' + tab);
+}
+
+// ============================================================
+// Sessions State
+// ============================================================
+
+let sessionsLoaded = false;
+let sessionsOffset = 0;
+let sessionsTotal = 0;
+let currentSessionId = null;
+let chatHistory = [];
+let crossChatHistory = [];
+let globalChatHistory = [];
+let selectedSearchSessions = new Set();
+
+// ============================================================
+// Sessions List
+// ============================================================
+
+async function loadSessions() {
+  sessionsOffset = 0;
+  try {
+    const r = await fetch('/api/sessions?limit=20&offset=0');
+    const data = await r.json();
+    sessionsTotal = data.total;
+    sessionsOffset = data.sessions.length;
+    renderSessionList(data.sessions, false);
+    sessionsLoaded = true;
+    $('load-more-btn').style.display = sessionsOffset < sessionsTotal ? '' : 'none';
+  } catch(e) { console.error('loadSessions', e); }
+}
+
+async function loadMoreSessions() {
+  try {
+    const r = await fetch('/api/sessions?limit=20&offset=' + sessionsOffset);
+    const data = await r.json();
+    sessionsOffset += data.sessions.length;
+    renderSessionList(data.sessions, true);
+    $('load-more-btn').style.display = sessionsOffset < sessionsTotal ? '' : 'none';
+  } catch(e) { console.error('loadMoreSessions', e); }
+}
+
+function renderSessionList(sessions, append) {
+  const container = $('session-items');
+  if (!append) container.innerHTML = '';
+  if (sessions.length === 0 && !append) {
+    container.innerHTML = '<div class="session-empty">No sessions yet. Join a meeting from the Dashboard to get started.</div>';
+    return;
+  }
+  for (const s of sessions) {
+    const div = document.createElement('div');
+    div.className = 'session-item' + (s.id === currentSessionId ? ' active' : '');
+    div.dataset.sid = s.id;
+    div.onclick = () => openSession(s.id);
+    let badges = '';
+    if (s.has_transcript) badges += '<span class="badge">TXT</span>';
+    if (s.has_audio) badges += '<span class="badge">WAV</span>';
+    if (s.has_video) badges += '<span class="badge">' + (s.video_format || 'VID').toUpperCase() + '</span>';
+    div.innerHTML = '<div class="date">' + escHtml(s.date) + '</div>'
+      + '<div class="preview">' + escHtml(s.preview || 'No transcript') + '</div>'
+      + '<div class="badges">' + badges + '</div>';
+    container.appendChild(div);
   }
 }
 
-function fallbackCopy(text) {
-  const ta = document.createElement('textarea');
-  ta.value = text;
-  ta.style.position = 'fixed';
-  ta.style.left = '-9999px';
-  document.body.appendChild(ta);
-  ta.select();
+// ============================================================
+// Session Detail
+// ============================================================
+
+async function openSession(id) {
+  currentSessionId = id;
+  chatHistory = [];
+  document.querySelectorAll('.session-item').forEach(el => el.classList.toggle('active', el.dataset.sid === id));
+
+  const detail = $('session-detail');
+  detail.className = 'session-detail';
+  detail.innerHTML = '<div style="color:#888;padding:20px">Loading...</div>';
+
   try {
-    document.execCommand('copy');
-    toast('Copied to clipboard!');
+    let transcript = '';
+    try {
+      const tr = await fetch('/api/sessions/' + encodeURIComponent(id) + '/transcript');
+      if (tr.ok) { const td = await tr.json(); transcript = td.text || ''; }
+    } catch(e) {}
+
+    let html = '';
+    html += '<div class="detail-section"><h3>Transcript</h3>';
+    html += '<div class="transcript-viewer">' + escHtml(transcript || 'No transcript available') + '</div></div>';
+
+    html += '<div class="detail-section"><h3>Audio</h3>';
+    html += '<audio controls preload="metadata" src="/api/sessions/' + encodeURIComponent(id) + '/audio"></audio></div>';
+
+    html += '<div class="detail-section" id="video-section" style="display:none"><h3>Video</h3>';
+    html += '<video controls preload="metadata" id="session-video"></video></div>';
+
+    html += '<div class="detail-section"><h3>Downloads</h3><div class="download-bar">';
+    html += '<a class="btn btn-primary" href="/api/sessions/' + encodeURIComponent(id) + '/transcript/download" download>Transcript (.txt)</a>';
+    html += '<a class="btn btn-primary" href="/api/sessions/' + encodeURIComponent(id) + '/audio" download="' + escHtml(id) + '.wav">Audio (.wav)</a>';
+    html += '<a class="btn btn-primary" id="video-download" style="display:none" href="/api/sessions/' + encodeURIComponent(id) + '/video" download>Video</a>';
+    html += '<button class="btn btn-danger" onclick="deleteSession(\'' + escHtml(id) + '\')">Delete Session</button>';
+    html += '</div></div>';
+
+    html += '<div class="detail-section"><h3>Chat with Transcript</h3>';
+    html += '<div class="chat-messages" id="chat-messages"></div>';
+    html += '<div class="chat-input-row">';
+    html += '<input type="text" class="chat-input" id="chat-input" placeholder="Ask about this meeting..." onkeydown="if(event.key===\'Enter\')sendChat()">';
+    html += '<button class="btn btn-primary" onclick="sendChat()">Send</button>';
+    html += '</div></div>';
+
+    detail.innerHTML = html;
+
+    try {
+      const vr = await fetch('/api/sessions/' + encodeURIComponent(id) + '/video', { method: 'HEAD' });
+      if (vr.ok) {
+        const ct = vr.headers.get('content-type') || '';
+        $('video-download').style.display = '';
+        if (ct.includes('webm')) {
+          $('session-video').src = '/api/sessions/' + encodeURIComponent(id) + '/video';
+          $('video-section').style.display = '';
+        }
+      }
+    } catch(e) {}
+
+    history.replaceState(null, '', '#sessions/' + id);
   } catch(e) {
-    toast('Copy failed');
+    detail.innerHTML = '<div style="color:#e94560;padding:20px">Failed to load session: ' + escHtml(e.message) + '</div>';
   }
-  document.body.removeChild(ta);
 }
+
+// ============================================================
+// Delete Session
+// ============================================================
+
+async function deleteSession(id) {
+  try {
+    const r = await fetch('/api/sessions/' + encodeURIComponent(id), { method: 'DELETE' });
+    if (r.ok) {
+      toast('Session deleted');
+      currentSessionId = null;
+      $('session-detail').className = 'session-detail session-detail-empty';
+      $('session-detail').innerHTML = 'Select a session to view details';
+      sessionsLoaded = false;
+      loadSessions();
+    } else {
+      toast('Delete failed: ' + r.status);
+    }
+  } catch(e) { toast('Delete failed: ' + e.message); }
+}
+
+// ============================================================
+// Session Chat
+// ============================================================
+
+async function sendChat() {
+  const input = $('chat-input');
+  const msg = input.value.trim();
+  if (!msg || !currentSessionId) return;
+  input.value = ''; input.disabled = true;
+
+  const msgs = $('chat-messages');
+  msgs.innerHTML += '<div class="chat-msg user"><span class="role">You:</span> ' + escHtml(msg) + '</div>';
+  const pid = 'cp-' + Date.now();
+  msgs.innerHTML += '<div class="chat-msg assistant" id="' + pid + '"><span class="role">Jarvis:</span> <em>Thinking...</em></div>';
+  msgs.scrollTop = msgs.scrollHeight;
+
+  try {
+    const r = await fetch('/api/sessions/' + encodeURIComponent(currentSessionId) + '/chat', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ message: msg, history: chatHistory })
+    });
+    const data = await r.json();
+    const p = $(pid);
+    if (data.reply) {
+      chatHistory.push({ role: 'user', content: msg });
+      chatHistory.push({ role: 'assistant', content: data.reply });
+      if (p) p.innerHTML = '<span class="role">Jarvis:</span> ' + escHtml(data.reply);
+    } else {
+      if (p) p.innerHTML = '<span class="role">Jarvis:</span> <em style="color:#e94560">' + escHtml(data.error || 'Error') + '</em>';
+    }
+  } catch(e) {
+    const p = $(pid);
+    if (p) p.innerHTML = '<span class="role">Jarvis:</span> <em style="color:#e94560">Request failed</em>';
+  }
+  input.disabled = false; input.focus(); msgs.scrollTop = msgs.scrollHeight;
+}
+
+// ============================================================
+// Search
+// ============================================================
+
+async function searchSessions() {
+  const query = $('session-search').value.trim();
+  if (!query) { sessionsLoaded = false; loadSessions(); return; }
+
+  const container = $('session-items');
+  container.innerHTML = '<div class="session-empty">Searching...</div>';
+  $('load-more-btn').style.display = 'none';
+  selectedSearchSessions.clear(); crossChatHistory = [];
+
+  try {
+    const r = await fetch('/api/sessions/search', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ query, max_results: 100 }) });
+    const data = await r.json();
+    container.innerHTML = '';
+    if (data.results.length === 0) { container.innerHTML = '<div class="session-empty">No matches for \'' + escHtml(query) + '\'</div>'; return; }
+
+    const re = new RegExp('(' + escRegex(query) + ')', 'gi');
+    for (const result of data.results) {
+      const div = document.createElement('div');
+      div.className = 'search-result-session';
+      let matchHtml = '';
+      for (const m of result.matches.slice(0, 3)) {
+        matchHtml += '<div class="match-text">';
+        if (m.context_before) matchHtml += '<div class="context-line">' + escHtml(m.context_before) + '</div>';
+        matchHtml += escHtml(m.text).replace(re, '<mark>$1</mark>');
+        if (m.context_after) matchHtml += '<div class="context-line">' + escHtml(m.context_after) + '</div>';
+        matchHtml += '</div>';
+      }
+      if (result.matches.length > 3) matchHtml += '<div style="color:#888;font-size:11px;margin-top:4px">+' + (result.matches.length - 3) + ' more</div>';
+      div.innerHTML = '<div class="sr-header">'
+        + '<input type="checkbox" data-sid="' + escHtml(result.session_id) + '" onchange="toggleSearchSession(this)">'
+        + '<span class="sr-date" onclick="openSession(\'' + escHtml(result.session_id) + '\')">' + escHtml(result.session_date) + '</span>'
+        + '<span style="color:#888;font-size:12px">(' + result.matches.length + ' matches)</span></div>' + matchHtml;
+      container.appendChild(div);
+    }
+
+    const chatBar = document.createElement('div');
+    chatBar.className = 'search-chat-bar';
+    chatBar.innerHTML = '<div style="color:#888;font-size:12px;margin-bottom:8px">Select up to 3 sessions, then ask a question</div>'
+      + '<div class="chat-input-row"><input type="text" class="chat-input" id="cross-chat-input" placeholder="Ask across selected sessions..." onkeydown="if(event.key===\'Enter\')sendCrossChat()">'
+      + '<button class="btn btn-primary" onclick="sendCrossChat()">Ask</button></div>'
+      + '<div class="chat-messages" id="cross-chat-messages" style="margin-top:8px"></div>';
+    container.appendChild(chatBar);
+  } catch(e) { container.innerHTML = '<div class="session-empty" style="color:#e94560">Search failed: ' + escHtml(e.message) + '</div>'; }
+}
+
+function toggleSearchSession(cb) {
+  const sid = cb.dataset.sid;
+  if (cb.checked) { if (selectedSearchSessions.size >= 3) { cb.checked = false; toast('Max 3 sessions'); return; } selectedSearchSessions.add(sid); }
+  else selectedSearchSessions.delete(sid);
+}
+
+// ============================================================
+// Cross-Session Chat
+// ============================================================
+
+async function sendCrossChat() {
+  const input = $('cross-chat-input'); const msg = input.value.trim();
+  if (!msg) return; if (selectedSearchSessions.size === 0) { toast('Select at least one session'); return; }
+  input.value = ''; input.disabled = true;
+  const msgs = $('cross-chat-messages');
+  msgs.innerHTML += '<div class="chat-msg user"><span class="role">You:</span> ' + escHtml(msg) + '</div>';
+  const pid = 'xcp-' + Date.now();
+  msgs.innerHTML += '<div class="chat-msg assistant" id="' + pid + '"><span class="role">Jarvis:</span> <em>Thinking...</em></div>';
+  msgs.scrollTop = msgs.scrollHeight;
+  try {
+    const r = await fetch('/api/sessions/chat', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ message: msg, session_ids: [...selectedSearchSessions], history: crossChatHistory }) });
+    const data = await r.json(); const p = $(pid);
+    if (data.reply) { crossChatHistory.push({role:'user',content:msg}); crossChatHistory.push({role:'assistant',content:data.reply}); if(p) p.innerHTML='<span class="role">Jarvis:</span> '+escHtml(data.reply); }
+    else { if(p) p.innerHTML='<span class="role">Jarvis:</span> <em style="color:#e94560">'+escHtml(data.error||'Error')+'</em>'; }
+  } catch(e) { const p=$(pid); if(p) p.innerHTML='<span class="role">Jarvis:</span> <em style="color:#e94560">Request failed</em>'; }
+  input.disabled = false; input.focus(); msgs.scrollTop = msgs.scrollHeight;
+}
+
+// ============================================================
+// Global Chat
+// ============================================================
+
+function toggleGlobalChat() {
+  $('global-chat-body').classList.toggle('open');
+}
+
+async function sendGlobalChat() {
+  const input = $('global-chat-input'); const msg = input.value.trim();
+  if (!msg) return;
+  input.value = ''; input.disabled = true;
+  const msgs = $('global-chat-messages');
+  msgs.innerHTML += '<div class="chat-msg user"><span class="role">You:</span> ' + escHtml(msg) + '</div>';
+  const pid = 'gcp-' + Date.now();
+  msgs.innerHTML += '<div class="chat-msg assistant" id="' + pid + '"><span class="role">Jarvis:</span> <em>Thinking...</em></div>';
+  msgs.scrollTop = msgs.scrollHeight;
+  try {
+    const r = await fetch('/api/sessions/chat/global', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ message: msg, history: globalChatHistory }) });
+    const data = await r.json(); const p = $(pid);
+    if (data.reply) { globalChatHistory.push({role:'user',content:msg}); globalChatHistory.push({role:'assistant',content:data.reply}); if(p) p.innerHTML='<span class="role">Jarvis:</span> '+escHtml(data.reply); }
+    else { if(p) p.innerHTML='<span class="role">Jarvis:</span> <em style="color:#e94560">'+escHtml(data.error||'Error')+'</em>'; }
+  } catch(e) { const p=$(pid); if(p) p.innerHTML='<span class="role">Jarvis:</span> <em style="color:#e94560">Request failed</em>'; }
+  input.disabled = false; input.focus(); msgs.scrollTop = msgs.scrollHeight;
+}
+
+// ============================================================
+// Tools Tab
+// ============================================================
+
+let toolsLoaded = false;
+let toolsChatHistory = [];
+
+async function loadTools() {
+  try {
+    const r = await fetch('/api/config');
+    const c = await r.json();
+    const tools = c.tools || [];
+    $('tools-json').value = JSON.stringify(tools, null, 2);
+    toolsLoaded = true;
+  } catch(e) { console.error('loadTools', e); }
+}
+
+function formatToolsJson() {
+  try {
+    const parsed = JSON.parse($('tools-json').value);
+    $('tools-json').value = JSON.stringify(parsed, null, 2);
+    $('tools-error').textContent = '';
+  } catch(e) {
+    $('tools-error').textContent = 'Invalid JSON: ' + e.message;
+  }
+}
+
+async function saveTools() {
+  const el = $('tools-json');
+  let parsed;
+  try { parsed = JSON.parse(el.value); } catch(e) { $('tools-error').textContent = 'Invalid JSON: ' + e.message; return; }
+  if (!Array.isArray(parsed)) { $('tools-error').textContent = 'Tools must be a JSON array'; return; }
+  $('tools-error').textContent = '';
+  try {
+    const r = await fetch('/api/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ tools: parsed }) });
+    const res = await r.json();
+    if (res.ok) toast('Tools saved!'); else toast('Save failed');
+  } catch(e) { toast('Save failed: ' + e.message); }
+}
+
+async function generateTool() {
+  const input = $('tools-chat-input'); const msg = input.value.trim();
+  if (!msg) return;
+  input.value = ''; input.disabled = true;
+  const msgs = $('tools-chat-messages');
+  msgs.innerHTML += '<div class="chat-msg user"><span class="role">You:</span> ' + escHtml(msg) + '</div>';
+  const pid = 'tcp-' + Date.now();
+  msgs.innerHTML += '<div class="chat-msg assistant" id="' + pid + '"><span class="role">AI:</span> <em>Generating...</em></div>';
+  msgs.scrollTop = msgs.scrollHeight;
+
+  try {
+    const r = await fetch('/api/tools/generate', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ prompt: msg, history: toolsChatHistory }) });
+    const data = await r.json(); const p = $(pid);
+    if (data.tool) {
+      const toolJson = JSON.stringify(data.tool, null, 2);
+      toolsChatHistory.push({role:'user',content:msg}); toolsChatHistory.push({role:'assistant',content:toolJson});
+      if (p) p.innerHTML = '<span class="role">AI:</span> Generated tool:<pre style="background:#0d1117;padding:8px;border-radius:4px;margin-top:4px;font-size:12px;overflow-x:auto">' + escHtml(toolJson) + '</pre>'
+        + '<button class="btn btn-success btn-sm" style="margin-top:6px" onclick="addToolToEditor(\'' + escHtml(btoa(JSON.stringify(data.tool))) + '\')">Add to config</button>';
+    } else if (data.raw) {
+      toolsChatHistory.push({role:'user',content:msg}); toolsChatHistory.push({role:'assistant',content:data.raw});
+      if (p) p.innerHTML = '<span class="role">AI:</span> ' + escHtml(data.raw) + (data.error ? '<div style="color:#f0a500;font-size:11px;margin-top:4px">' + escHtml(data.error) + '</div>' : '');
+    } else if (data.error) {
+      if (p) p.innerHTML = '<span class="role">AI:</span> <em style="color:#e94560">' + escHtml(data.error) + '</em>';
+    }
+  } catch(e) { const p=$(pid); if(p) p.innerHTML='<span class="role">AI:</span> <em style="color:#e94560">Request failed</em>'; }
+  input.disabled = false; input.focus(); msgs.scrollTop = msgs.scrollHeight;
+}
+
+function addToolToEditor(b64) {
+  try {
+    const tool = JSON.parse(atob(b64));
+    let current = [];
+    try { current = JSON.parse($('tools-json').value); } catch(e) {}
+    if (!Array.isArray(current)) current = [];
+    current.push(tool);
+    $('tools-json').value = JSON.stringify(current, null, 2);
+    $('tools-error').textContent = '';
+    toast('Tool added to editor. Click Save to apply.');
+  } catch(e) { toast('Failed to add tool'); }
+}
+
+// ============================================================
+// URL Hash Routing
+// ============================================================
+
+function initFromHash() {
+  const hash = location.hash.replace('#', '') || 'dashboard';
+  if (hash.startsWith('sessions/')) {
+    switchTab('sessions');
+    const sid = hash.substring(9);
+    if (sid) setTimeout(() => openSession(sid), 300);
+  } else if (hash === 'sessions') { switchTab('sessions'); }
+  else if (hash === 'tools') { switchTab('tools'); }
+}
+
+// ============================================================
+// Init
+// ============================================================
 
 loadConfig();
 pollStatus();
 setInterval(pollStatus, 5000);
 connectTranscript();
+initFromHash();
 </script>
 </body>
 </html>

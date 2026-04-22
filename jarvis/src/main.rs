@@ -11,21 +11,10 @@ mod db;
 mod llm;
 mod process;
 mod server;
+mod sessions;
 mod tools;
 mod transcription;
 mod tts;
-
-/// Check if ffmpeg is available on the system PATH.
-fn has_ffmpeg() -> bool {
-    let cmd = if cfg!(target_os = "windows") { "where" } else { "which" };
-    std::process::Command::new(cmd)
-        .arg("ffmpeg")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
 
 /// Repair WAV files that have zero-length headers but actual audio data.
 /// This happens when the process is killed (SIGKILL) before finalize() runs.
@@ -200,14 +189,9 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Session audio: {}", session_audio_path.display());
 
     // Video recording setup
-    let ffmpeg_available = if cfg.record_video { has_ffmpeg() } else { false };
     let session_video_path = if cfg.record_video {
-        let ext = if ffmpeg_available { "mkv" } else { "webm" };
-        let path = sessions_dir.join(format!("{}.{}", session_ts, ext));
+        let path = sessions_dir.join(format!("{}.webm", session_ts));
         tracing::info!("Session video: {}", path.display());
-        if !ffmpeg_available {
-            tracing::warn!("record_video enabled but ffmpeg not found; video will be saved as .webm");
-        }
         Some(path)
     } else {
         None
@@ -482,7 +466,7 @@ async fn main() -> anyhow::Result<()> {
                             &cfg.bot_name,
                             cfg.record_video,
                             session_video_path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default().as_str(),
-                            ffmpeg_available,
+                            false,
                         ) {
                             tracing::error!("[process] failed to start vexa-bot: {}", e);
                         }
