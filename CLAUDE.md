@@ -40,16 +40,33 @@ services/vexa-bot/         TypeScript bot framework
 jarvis.config.example.json Example JSON config file
 scripts/package-jarvis.sh  Packaging script
 docs/plans/                Architecture designs and implementation plans
+
+Dockerfile                 Multi-stage build (Rust + TS + Playwright runtime)
+docker-compose.yml         Jarvis + Caddy reverse proxy
+docker/entrypoint.sh       Xvfb + PulseAudio + config overrides + gosu
+Caddyfile                  HTTPS reverse proxy with basic auth
+.env.example               Environment variables template
 ```
 
 ## Build & Run
+
+### Docker (recommended for deployment)
+
+```bash
+cp jarvis.config.example.json jarvis.config.json  # edit with your API key
+cp .env.example .env                               # set OPENAI_API_KEY
+docker compose up -d jarvis                        # local testing
+docker compose up -d                               # with Caddy HTTPS (VPS)
+```
+
+### Native (development)
 
 ```bash
 # Build Jarvis
 cd jarvis && cargo build
 
 # Build vexa-bot TypeScript (MUST use npm run build, not just tsc)
-cd services/vexa-bot && npm run build
+cd services/vexa-bot/core && npm install && npm run build
 
 # Configure (from project root)
 cp jarvis.config.example.json jarvis.config.json  # edit with your API key

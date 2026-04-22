@@ -91,7 +91,109 @@ Transcript format:
 [14:05:30] [Jarvis] So far you've discussed Q3 priorities, with a focus on API redesign.
 ```
 
-## Quick Start / Швидкий старт
+## Quick Start: Docker (Recommended) / Швидкий старт: Docker
+
+The easiest way to run Jarvis — no Rust/Node.js installation needed.
+
+### Prerequisites / Вимоги
+
+- **Docker** + **Docker Compose**
+- **OpenAI API key**
+
+### 1. Clone and configure / Клонувати та налаштувати
+
+```bash
+git clone https://github.com/Ivlad003/ai-google-meet-assistant.git
+cd ai-google-meet-assistant
+cp jarvis.config.example.json jarvis.config.json
+cp .env.example .env
+```
+
+Edit `.env` — set your `OPENAI_API_KEY` and optionally `MEET_URL`:
+
+```bash
+OPENAI_API_KEY=sk-proj-your-key-here
+MEET_URL=https://meet.google.com/abc-defg-hij
+```
+
+### 2. Run / Запустити
+
+```bash
+docker compose up -d jarvis
+```
+
+Open http://localhost:8080, enter a meeting URL, and click "Launch Bot".
+
+### 3. Admit the bot / Впустити бота
+
+When the bot requests to join your Google Meet, click "Admit" in the meeting lobby.
+
+### 4. Stop / Зупинити
+
+```bash
+docker compose down
+```
+
+Session files (transcripts, audio) are persisted in the `jarvis-data` Docker volume.
+
+---
+
+## VPS Deployment with HTTPS / Розгортання на VPS з HTTPS
+
+For production deployment on a VPS with automatic HTTPS via Let's Encrypt:
+
+### 1. Configure domain and auth
+
+Edit `Caddyfile` — replace `your-domain.com` with your actual domain:
+
+```
+your-domain.com {
+    basicauth {
+        {$CADDY_AUTH_USER:admin} {$CADDY_AUTH_HASH}
+    }
+    reverse_proxy jarvis:8080
+}
+```
+
+Generate a password hash and add to `.env`:
+
+```bash
+docker run --rm caddy:2-alpine caddy hash-password --plaintext 'your-password'
+```
+
+```bash
+# .env
+CADDY_AUTH_USER=admin
+CADDY_AUTH_HASH=$2a$14$generated-hash-here
+```
+
+### 2. Start with Caddy
+
+```bash
+docker compose up -d
+```
+
+This starts both Jarvis and Caddy. Your bot is now accessible at `https://your-domain.com` with basic auth.
+
+### Docker Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OPENAI_API_KEY` | **Yes** | OpenAI API key (overrides config file) |
+| `MEET_URL` | No | Default meeting URL |
+| `BOT_NAME` | No | Bot display name |
+| `LANGUAGE` | No | Transcription language (auto/en/uk) |
+| `TTS_VOICE` | No | OpenAI TTS voice |
+| `RESPONSE_MODE` | No | `smart` or `name_only` |
+| `RUST_LOG` | No | Log level (default: `jarvis=info`) |
+| `CADDY_AUTH_USER` | No | Basic auth username (default: admin) |
+| `CADDY_AUTH_HASH` | No | Basic auth password hash |
+
+---
+
+## Quick Start: Native Build / Швидкий старт: Нативна збірка
+
+For development or if you prefer running without Docker.
 
 ### Prerequisites / Вимоги
 
@@ -102,8 +204,8 @@ Transcript format:
 ### 1. Clone and configure / Клонувати та налаштувати
 
 ```bash
-git clone https://github.com/aspect-build/ai_google_meet_asistant.git
-cd ai_google_meet_asistant
+git clone https://github.com/Ivlad003/ai-google-meet-assistant.git
+cd ai-google-meet-assistant
 cp jarvis.config.example.json jarvis.config.json
 ```
 
@@ -116,7 +218,7 @@ Edit `jarvis.config.json` — set your `openai_key` and optionally `meet_url`.
 cd jarvis && cargo build && cd ..
 
 # Build vexa-bot (TypeScript + browser utils bundle)
-cd services/vexa-bot && npm install --ignore-scripts && npm run build && cd ../..
+cd services/vexa-bot/core && npm install && npm run build && cd ../../..
 ```
 
 ### 3. Run / Запустити
@@ -201,14 +303,23 @@ All settings are in `jarvis.config.json`. See `jarvis.config.example.json` for t
 ## Debugging / Дебаг
 
 ```bash
-# Verbose logs
+# Native: Verbose logs
 RUST_LOG=jarvis=debug ./jarvis/target/debug/jarvis
+
+# Docker: View logs
+docker logs -f jarvis
+
+# Docker: Verbose logs
+RUST_LOG=jarvis=debug docker compose up -d jarvis
 
 # Check vexa-bot build
 cd services/vexa-bot/core && npx tsc --noEmit
 
-# View session files
+# View session files (native)
 ls ~/Library/Application\ Support/jarvis/sessions/
+
+# View session files (Docker)
+docker exec jarvis ls /data/jarvis/sessions/
 ```
 
 | Problem | Solution |
@@ -223,12 +334,14 @@ ls ~/Library/Application\ Support/jarvis/sessions/
 
 ## Tech Stack
 
-- **Rust** — Jarvis desktop app (Axum, hound, tracing-appender, tokio)
+- **Rust** — Jarvis core app (Axum, hound, tracing-appender, tokio)
 - **TypeScript/Playwright** — vexa-bot browser automation with stealth plugin
 - **OpenAI GPT-5.4** — LLM responses + GPT-5 for intent detection (reasoning_effort=minimal)
 - **OpenAI Whisper** — speech-to-text (cloud or local via whisper-rs)
 - **OpenAI TTS** — text-to-speech
 - **WebRTC** — audio capture and playback
+- **Docker** — containerized deployment with Xvfb + PulseAudio for headless WebRTC
+- **Caddy** — reverse proxy with automatic HTTPS
 
 ## License
 
