@@ -72,8 +72,23 @@ Audio capture in bridge mode bypasses PulseAudio — it hooks `RTCPeerConnection
 
 - Jarvis runs as `pwuser` (UID 1001), not root
 - Xvfb/PulseAudio start as root in entrypoint, then `gosu pwuser` drops privileges
-- Caddy provides HTTPS with automatic Let's Encrypt + basic auth
+- Caddy is the sole entry point — Jarvis port is not exposed externally (`expose` not `ports`)
+- Caddy enforces HTTP `basic_auth` on all requests (user/hash from env vars)
 - API key is never exposed via `/api/config` GET endpoint
+- For VPS: replace `:8080` with domain in Caddyfile for auto HTTPS via Let's Encrypt
+
+### Caddy Auth Setup
+
+```bash
+# Generate bcrypt hash
+docker run --rm caddy:2-alpine caddy hash-password --plaintext 'your-password'
+
+# In .env — escape $ as $$ for docker-compose
+CADDY_AUTH_USER=admin
+CADDY_AUTH_HASH=$$2a$$14$$your-hash-here
+```
+
+Note: `basicauth` is deprecated in Caddy 2.10+ — use `basic_auth` (with underscore).
 
 ## Session Output Files
 

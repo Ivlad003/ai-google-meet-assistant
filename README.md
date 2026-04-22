@@ -119,10 +119,10 @@ MEET_URL=https://meet.google.com/abc-defg-hij
 ### 2. Run / Запустити
 
 ```bash
-docker compose up -d jarvis
+docker compose up -d
 ```
 
-Open http://localhost:8080, enter a meeting URL, and click "Launch Bot".
+Open http://localhost:8080 — you'll be prompted for basic auth (default: `admin` / password you set).
 
 ### 3. Admit the bot / Впустити бота
 
@@ -138,33 +138,42 @@ Session files (transcripts, audio) are persisted in the `jarvis-data` Docker vol
 
 ---
 
-## VPS Deployment with HTTPS / Розгортання на VPS з HTTPS
+## Setting Up Authentication / Налаштування аутентифікації
 
-For production deployment on a VPS with automatic HTTPS via Let's Encrypt:
-
-### 1. Configure domain and auth
-
-Edit `Caddyfile` — replace `your-domain.com` with your actual domain:
-
-```
-your-domain.com {
-    basicauth {
-        {$CADDY_AUTH_USER:admin} {$CADDY_AUTH_HASH}
-    }
-    reverse_proxy jarvis:8080
-}
-```
-
-Generate a password hash and add to `.env`:
+All access goes through Caddy with HTTP basic auth. Generate a password hash:
 
 ```bash
 docker run --rm caddy:2-alpine caddy hash-password --plaintext 'your-password'
 ```
 
+Add to `.env` — **escape every `$` as `$$`** (docker-compose requirement):
+
 ```bash
-# .env
 CADDY_AUTH_USER=admin
-CADDY_AUTH_HASH=$2a$14$generated-hash-here
+# Original hash:  $2a$14$abc123...
+# Escaped for .env: $$2a$$14$$abc123...
+CADDY_AUTH_HASH=$$2a$$14$$your-escaped-hash-here
+```
+
+Restart: `docker compose down && docker compose up -d`
+
+---
+
+## VPS Deployment with HTTPS / Розгортання на VPS з HTTPS
+
+For production deployment on a VPS with automatic HTTPS via Let's Encrypt:
+
+### 1. Configure domain
+
+Edit `Caddyfile` — replace `:8080` with your domain name:
+
+```
+your-domain.com {
+    basic_auth {
+        {$CADDY_AUTH_USER:admin} {$CADDY_AUTH_HASH}
+    }
+    reverse_proxy jarvis:8080
+}
 ```
 
 ### 2. Start with Caddy
@@ -173,7 +182,7 @@ CADDY_AUTH_HASH=$2a$14$generated-hash-here
 docker compose up -d
 ```
 
-This starts both Jarvis and Caddy. Your bot is now accessible at `https://your-domain.com` with basic auth.
+Caddy auto-obtains HTTPS certificates. Your bot is accessible at `https://your-domain.com` with basic auth.
 
 ### Docker Environment Variables
 

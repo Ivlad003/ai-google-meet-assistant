@@ -6,8 +6,9 @@ services:
     container_name: jarvis
     shm_size: '2g'
     restart: unless-stopped
-    ports:
-      - "8080:8080"
+    # No external port — only reachable via Caddy on the internal network
+    expose:
+      - "8080"
     volumes:
       - jarvis-data:/data/jarvis
       - ./jarvis.config.json:/etc/jarvis/config.json:ro
@@ -28,6 +29,7 @@ services:
     container_name: jarvis-caddy
     restart: unless-stopped
     ports:
+      - "8080:8080"
       - "80:80"
       - "443:443"
     environment:

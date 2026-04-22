@@ -54,9 +54,8 @@ Caddyfile                  HTTPS reverse proxy with basic auth
 
 ```bash
 cp jarvis.config.example.json jarvis.config.json  # edit with your API key
-cp .env.example .env                               # set OPENAI_API_KEY
-docker compose up -d jarvis                        # local testing
-docker compose up -d                               # with Caddy HTTPS (VPS)
+cp .env.example .env                               # set OPENAI_API_KEY + CADDY_AUTH_HASH
+docker compose up -d                               # starts Jarvis + Caddy with auth on :8080
 ```
 
 ### Native (development)

@@ -1,14 +1,11 @@
-# Replace with your domain name.
-# Caddy automatically obtains and renews HTTPS certificates via Let's Encrypt.
+# Local development: Caddy on :8080 with basic auth proxying to Jarvis
+# For VPS with domain: replace :8080 with your-domain.com (auto HTTPS)
 #
-# For local/IP-only access without HTTPS, use:
-#   :80
+# Generate hash: docker run --rm caddy:2-alpine caddy hash-password --plaintext 'your-password'
+# In .env, escape $ as $$ (e.g. $$2a$$14$$...)
 #
-# IMPORTANT: Set CADDY_AUTH_USER and CADDY_AUTH_HASH in .env
-# Generate a password hash: docker run --rm caddy:2-alpine caddy hash-password --plaintext 'your-password'
-#
-your-domain.com {
-	basicauth {
+:8080 {
+	basic_auth {
 		{$CADDY_AUTH_USER:admin} {$CADDY_AUTH_HASH}
 	}
 	reverse_proxy jarvis:8080
