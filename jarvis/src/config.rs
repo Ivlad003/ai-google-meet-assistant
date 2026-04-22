@@ -25,7 +25,7 @@ pub struct ConfigFile {
     pub tools: Option<Vec<super::tools::ToolDef>>,
     pub auth_enabled: Option<bool>,
     pub auth_user: Option<String>,
-    pub auth_hash: Option<String>,
+    pub auth_password: Option<String>,
 }
 
 impl ConfigFile {
@@ -90,7 +90,7 @@ impl ConfigFile {
         if let Some(v) = env_str("JARVIS_RESPONSE_MODE") { self.response_mode = Some(v); }
         if let Some(v) = env_bool("JARVIS_RECORD_VIDEO") { self.record_video = Some(v); }
         if let Some(v) = env_str("AUTH_USER") { self.auth_user = Some(v); }
-        if let Some(v) = env_str("AUTH_HASH") { self.auth_hash = Some(v); }
+        if let Some(v) = env_str("AUTH_PASSWORD") { self.auth_password = Some(v); }
         if let Some(v) = env_bool("AUTH_ENABLED") { self.auth_enabled = Some(v); }
         // Tools from env: JSON array string
         if let Some(v) = env_str("JARVIS_TOOLS") {
@@ -125,7 +125,7 @@ pub struct Config {
     pub tools: Vec<super::tools::ToolDef>,
     pub auth_enabled: bool,
     pub auth_user: String,
-    pub auth_hash: String,
+    pub auth_password: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -182,7 +182,7 @@ impl Config {
             tools: cf.tools.clone().unwrap_or_default(),
             auth_enabled: cf.auth_enabled.unwrap_or(false),
             auth_user: cf.auth_user.clone().unwrap_or_else(|| "admin".to_string()),
-            auth_hash: cf.auth_hash.clone().unwrap_or_default(),
+            auth_password: cf.auth_password.clone().unwrap_or_default(),
         }
     }
 }

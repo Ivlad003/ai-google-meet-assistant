@@ -22,7 +22,7 @@ services:
       - MAX_RESPONSE_TOKENS=${MAX_RESPONSE_TOKENS:-}
       - AUTH_ENABLED=${AUTH_ENABLED:-false}
       - AUTH_USER=${AUTH_USER:-admin}
-      - AUTH_HASH=${AUTH_HASH:-}
+      - AUTH_PASSWORD=${AUTH_PASSWORD:-}
       - RUST_LOG=${RUST_LOG:-jarvis=info}
     stop_grace_period: 30s
     ports:

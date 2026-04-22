@@ -244,7 +244,7 @@ async fn main() -> anyhow::Result<()> {
         http_client: reqwest::Client::new(),
         auth_enabled: cfg.auth_enabled,
         auth_user: cfg.auth_user.clone(),
-        auth_hash: cfg.auth_hash.clone(),
+        auth_password: cfg.auth_password.clone(),
     });
 
     let web_router = server::router(app_state);

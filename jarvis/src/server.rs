@@ -36,7 +36,7 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     pub auth_enabled: bool,
     pub auth_user: String,
-    pub auth_hash: String,
+    pub auth_password: String,
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -79,7 +79,7 @@ async fn basic_auth_middleware(
                 if let Ok(decoded_str) = String::from_utf8(decoded) {
                     if let Some((user, password)) = decoded_str.split_once(':') {
                         if user == state.auth_user
-                            && bcrypt::verify(password, &state.auth_hash).unwrap_or(false)
+                            && password == state.auth_password
                         {
                             return next.run(req).await;
                         }
