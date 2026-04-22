@@ -1,0 +1,37 @@
+# Rust build artifacts
+jarvis/target/
+
+# Node modules (rebuilt in Docker)
+services/vexa-bot/core/node_modules/
+services/vexa-bot/node_modules/
+node_modules/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Config with secrets
+jarvis.config.json
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+# Docs (not needed in image)
+docs/
+README.md
+
+# OMC / Claude
+.omc/
+.claude/
+CLAUDE.md

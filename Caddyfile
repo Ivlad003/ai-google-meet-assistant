@@ -1,0 +1,12 @@
+# Local development: Caddy on :8080 with basic auth proxying to Jarvis
+# For VPS with domain: replace :8080 with your-domain.com (auto HTTPS)
+#
+# Generate hash: docker run --rm caddy:2-alpine caddy hash-password --plaintext 'your-password'
+# In .env, escape $ as $$ (e.g. $$2a$$14$$...)
+#
+:8080 {
+	basic_auth {
+		{$CADDY_AUTH_USER:admin} {$CADDY_AUTH_HASH}
+	}
+	reverse_proxy jarvis:8080
+}

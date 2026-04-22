@@ -19,9 +19,81 @@
 - **Session transcripts** — each session writes `[HH:MM:SS] [Speaker] text` to a `.txt` file
 - **File logging** — `tracing-appender` writes daily rotated logs alongside console output
 
+## Docker Environment
+
+### How Headless WebRTC Works
+
+Google Meet requires a headed browser for WebRTC. In Docker, we use:
+- **Xvfb** (`:99`) — virtual X11 framebuffer so Chrome thinks it has a display
+- **PulseAudio** — virtual audio devices for TTS injection into meetings
+
+The entrypoint (`docker/entrypoint.sh`) starts Xvfb and PulseAudio as root, then drops to `pwuser` via `gosu` before running Jarvis.
+
+### Virtual Audio Devices
+
+```
+meet_sink     — null sink for general audio capture
+tts_sink      — null sink for TTS audio injection
+virtual_mic   — remap source from tts_sink.monitor (Chrome sees as real mic)
+```
+
+Audio capture in bridge mode bypasses PulseAudio — it hooks `RTCPeerConnection` directly via `AudioContext` + `ScriptProcessorNode`.
+
+### Docker-Specific Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DOCKER_MODE` | `1` | Set automatically. Skips browser auto-open |
+| `VEXA_BOT_DIR` | `/app/vexa-bot` | Path to vexa-bot inside container |
+| `JARVIS_DATA_DIR` | `/data/jarvis` | Data directory (sessions, logs, db) |
+| `JARVIS_CONFIG` | `/etc/jarvis/config.json` | Mounted config file path |
+| `DISPLAY` | `:99` | Xvfb virtual display |
+| `PULSE_SERVER` | `unix:/tmp/pulse-server` | PulseAudio socket for cross-user access |
+
+### Docker Data Paths
+
+```
+/data/jarvis/              (mounted volume: jarvis-data)
+  sessions/
+    YYYY-MM-DD_HHMMSS.txt  — transcript
+    YYYY-MM-DD_HHMMSS.wav  — audio recording
+  logs/
+    jarvis.log.YYYY-MM-DD  — daily rotated logs
+  jarvis.db                — SQLite database
+```
+
+### Multi-Stage Build
+
+1. **rust-builder** (Ubuntu 22.04) — compiles Jarvis binary. Must match runtime glibc (Jammy = 2.35)
+2. **ts-builder** (node:20-bookworm) — compiles vexa-bot TypeScript + browser-utils bundle
+3. **runtime** (playwright:v1.56.0-jammy) — Xvfb, PulseAudio, ffmpeg, gosu + both artifacts
+
+### Security
+
+- Jarvis runs as `pwuser` (UID 1001), not root
+- Xvfb/PulseAudio start as root in entrypoint, then `gosu pwuser` drops privileges
+- Caddy is the sole entry point — Jarvis port is not exposed externally (`expose` not `ports`)
+- Caddy enforces HTTP `basic_auth` on all requests (user/hash from env vars)
+- API key is never exposed via `/api/config` GET endpoint
+- For VPS: replace `:8080` with domain in Caddyfile for auto HTTPS via Let's Encrypt
+
+### Caddy Auth Setup
+
+```bash
+# Generate bcrypt hash
+docker run --rm caddy:2-alpine caddy hash-password --plaintext 'your-password'
+
+# In .env — escape $ as $$ for docker-compose
+CADDY_AUTH_USER=admin
+CADDY_AUTH_HASH=$$2a$$14$$your-hash-here
+```
+
+Note: `basicauth` is deprecated in Caddy 2.10+ — use `basic_auth` (with underscore).
+
 ## Session Output Files
 
-All saved to `~/Library/Application Support/jarvis/` (macOS):
+**Native** — saved to `~/Library/Application Support/jarvis/` (macOS):
+**Docker** — saved to `/data/jarvis/` (mounted volume):
 
 - `sessions/YYYY-MM-DD_HHMMSS.txt` — transcript with timestamps and speaker names
 - `sessions/YYYY-MM-DD_HHMMSS.wav` — full audio recording

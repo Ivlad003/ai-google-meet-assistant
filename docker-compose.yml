@@ -1,0 +1,57 @@
+services:
+  jarvis:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: jarvis
+    shm_size: '2g'
+    restart: unless-stopped
+    # No external port — only reachable via Caddy on the internal network
+    expose:
+      - "8080"
+    volumes:
+      - jarvis-data:/data/jarvis
+      - ./jarvis.config.json:/etc/jarvis/config.json:ro
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - BOT_NAME=${BOT_NAME:-}
+      - MEET_URL=${MEET_URL:-}
+      - LANGUAGE=${LANGUAGE:-}
+      - TTS_VOICE=${TTS_VOICE:-}
+      - RESPONSE_MODE=${RESPONSE_MODE:-}
+      - RUST_LOG=${RUST_LOG:-jarvis=info}
+    stop_grace_period: 30s
+    networks:
+      - jarvis-net
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: jarvis-caddy
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/app/caddy-entrypoint.sh"]
+    ports:
+      - "8080:8080"
+      - "80:80"
+      - "443:443"
+    environment:
+      - CADDY_AUTH_ENABLED=${CADDY_AUTH_ENABLED:-true}
+      - CADDY_AUTH_USER=${CADDY_AUTH_USER:-admin}
+      - CADDY_AUTH_HASH=${CADDY_AUTH_HASH:-}
+      - CADDY_LISTEN=${CADDY_LISTEN:-:8080}
+    volumes:
+      - ./docker/caddy-entrypoint.sh:/app/caddy-entrypoint.sh:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - jarvis-net
+    depends_on:
+      - jarvis
+
+volumes:
+  jarvis-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  jarvis-net:
+    driver: bridge

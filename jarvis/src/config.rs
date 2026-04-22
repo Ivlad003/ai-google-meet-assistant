@@ -120,6 +120,10 @@ impl Config {
 }
 
 fn dirs_or_default() -> PathBuf {
+    // JARVIS_DATA_DIR env var takes priority (Docker deployments)
+    if let Ok(dir) = std::env::var("JARVIS_DATA_DIR") {
+        return PathBuf::from(dir);
+    }
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("jarvis")
