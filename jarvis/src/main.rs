@@ -255,8 +255,10 @@ async fn main() -> anyhow::Result<()> {
         axum::serve(listener, web_router).await.unwrap();
     });
 
-    // Open browser to Web UI
-    open::that(format!("http://localhost:{}", cfg.port)).ok();
+    // Open browser to Web UI (skip in Docker/headless environments)
+    if std::env::var("DOCKER_MODE").is_err() {
+        open::that(format!("http://localhost:{}", cfg.port)).ok();
+    }
 
     // Spawn audio processing / transcription loop
     let bridge_for_tx = bridge_state.clone();

@@ -1,0 +1,9 @@
+# Replace with your domain name.
+# Caddy automatically obtains and renews HTTPS certificates via Let's Encrypt.
+#
+# For local/IP-only access without HTTPS, use:
+#   :80
+#
+your-domain.com {
+	reverse_proxy jarvis:8080
+}

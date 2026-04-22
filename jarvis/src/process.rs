@@ -185,9 +185,20 @@ pub fn find_node() -> anyhow::Result<PathBuf> {
 }
 
 /// Find vexa-bot directory. Checks:
-/// 1. Next to the jarvis binary (packaged mode)
-/// 2. Relative to project root (development mode)
+/// 1. VEXA_BOT_DIR environment variable (Docker / custom deployments)
+/// 2. Next to the jarvis binary (packaged mode)
+/// 3. Relative to project root (development mode)
 pub fn find_vexa_bot_dir() -> anyhow::Result<PathBuf> {
+    // Check VEXA_BOT_DIR env var (Docker mode)
+    if let Ok(dir) = std::env::var("VEXA_BOT_DIR") {
+        let path = PathBuf::from(&dir);
+        if path.exists() {
+            tracing::info!("[process] using VEXA_BOT_DIR vexa-bot at {:?}", path);
+            return Ok(path);
+        }
+        tracing::warn!("[process] VEXA_BOT_DIR={} does not exist, trying other paths", dir);
+    }
+
     // Check next to binary (packaged mode)
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
@@ -216,6 +227,6 @@ pub fn find_vexa_bot_dir() -> anyhow::Result<PathBuf> {
     }
 
     anyhow::bail!(
-        "vexa-bot directory not found. Place it next to the jarvis binary or run from the project root."
+        "vexa-bot directory not found. Set VEXA_BOT_DIR, place it next to the jarvis binary, or run from the project root."
     )
 }

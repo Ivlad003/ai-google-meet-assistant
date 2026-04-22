@@ -1,0 +1,48 @@
+services:
+  jarvis:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: jarvis
+    shm_size: '2g'
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - jarvis-data:/data/jarvis
+      - ./jarvis.config.json:/etc/jarvis/config.json:ro
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - BOT_NAME=${BOT_NAME:-}
+      - MEET_URL=${MEET_URL:-}
+      - LANGUAGE=${LANGUAGE:-}
+      - TTS_VOICE=${TTS_VOICE:-}
+      - RESPONSE_MODE=${RESPONSE_MODE:-}
+      - RUST_LOG=${RUST_LOG:-jarvis=info}
+    networks:
+      - jarvis-net
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: jarvis-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - jarvis-net
+    depends_on:
+      - jarvis
+
+volumes:
+  jarvis-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  jarvis-net:
+    driver: bridge
