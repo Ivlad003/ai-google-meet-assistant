@@ -28,15 +28,18 @@ services:
     image: caddy:2-alpine
     container_name: jarvis-caddy
     restart: unless-stopped
+    entrypoint: ["/bin/sh", "/app/caddy-entrypoint.sh"]
     ports:
       - "8080:8080"
       - "80:80"
       - "443:443"
     environment:
+      - CADDY_AUTH_ENABLED=${CADDY_AUTH_ENABLED:-true}
       - CADDY_AUTH_USER=${CADDY_AUTH_USER:-admin}
-      - CADDY_AUTH_HASH=${CADDY_AUTH_HASH}
+      - CADDY_AUTH_HASH=${CADDY_AUTH_HASH:-}
+      - CADDY_LISTEN=${CADDY_LISTEN:-:8080}
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./docker/caddy-entrypoint.sh:/app/caddy-entrypoint.sh:ro
       - caddy-data:/data
       - caddy-config:/config
     networks:
