@@ -3,7 +3,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: jarvis
     shm_size: '2g'
     restart: unless-stopped
     expose:
