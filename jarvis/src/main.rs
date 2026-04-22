@@ -96,11 +96,21 @@ struct Args {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let config_file = config::ConfigFile::load(&args.config).unwrap_or_else(|e| {
-        eprintln!("Error: failed to load config '{}': {}", args.config, e);
-        eprintln!("Create one from jarvis.config.example.json");
-        std::process::exit(1);
-    });
+    // Load config: try JSON file first, fall back to pure env vars
+    let config_file = match config::ConfigFile::load(&args.config) {
+        Ok(cf) => cf,
+        Err(e) => {
+            // If JARVIS_OPENAI_KEY or OPENAI_API_KEY is set, run in env-only mode
+            if std::env::var("JARVIS_OPENAI_KEY").is_ok() || std::env::var("OPENAI_API_KEY").is_ok() {
+                tracing::info!("Config file not found, using environment variables");
+                config::ConfigFile::from_env()
+            } else {
+                eprintln!("Error: failed to load config '{}': {}", args.config, e);
+                eprintln!("Create one from jarvis.config.example.json or set JARVIS_* env vars");
+                std::process::exit(1);
+            }
+        }
+    };
     let cfg = config::Config::from_file(&config_file);
 
     // Set up file logging

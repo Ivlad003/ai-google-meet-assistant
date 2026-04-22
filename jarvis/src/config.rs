@@ -28,14 +28,70 @@ pub struct ConfigFile {
 impl ConfigFile {
     pub fn load(path: &str) -> anyhow::Result<Self> {
         let contents = std::fs::read_to_string(path)?;
-        let config: Self = serde_json::from_str(&contents)?;
+        let mut config: Self = serde_json::from_str(&contents)?;
+        config.override_from_env();
         Ok(config)
+    }
+
+    /// Load config purely from environment variables (no JSON file needed).
+    pub fn from_env() -> Self {
+        let mut config = Self::default();
+        config.override_from_env();
+        config
     }
 
     pub fn save(&self, path: &str) -> anyhow::Result<()> {
         let contents = serde_json::to_string_pretty(self)?;
         std::fs::write(path, contents)?;
         Ok(())
+    }
+
+    /// Override config fields from environment variables.
+    /// Convention: JARVIS_<FIELD_NAME> in uppercase.
+    /// Env vars take priority over JSON file values.
+    fn override_from_env(&mut self) {
+        fn env_str(key: &str) -> Option<String> {
+            std::env::var(key).ok().filter(|s| !s.is_empty())
+        }
+        fn env_u16(key: &str) -> Option<u16> {
+            std::env::var(key).ok().and_then(|s| s.parse().ok())
+        }
+        fn env_u32(key: &str) -> Option<u32> {
+            std::env::var(key).ok().and_then(|s| s.parse().ok())
+        }
+        fn env_f32(key: &str) -> Option<f32> {
+            std::env::var(key).ok().and_then(|s| s.parse().ok())
+        }
+        fn env_bool(key: &str) -> Option<bool> {
+            std::env::var(key).ok().map(|s| matches!(s.as_str(), "1" | "true" | "yes"))
+        }
+
+        // Also support OPENAI_API_KEY as a common convention
+        if let Some(v) = env_str("JARVIS_OPENAI_KEY").or_else(|| env_str("OPENAI_API_KEY")) {
+            self.openai_key = Some(v);
+        }
+        if let Some(v) = env_str("JARVIS_MEET_URL") { self.meet_url = Some(v); }
+        if let Some(v) = env_str("JARVIS_BOT_NAME") { self.bot_name = Some(v); }
+        if let Some(v) = env_str("JARVIS_TRANSCRIPTION_MODE") { self.transcription_mode = Some(v); }
+        if let Some(v) = env_str("JARVIS_WHISPER_MODEL") { self.whisper_model = Some(v); }
+        if let Some(v) = env_u16("JARVIS_PORT") { self.port = Some(v); }
+        if let Some(v) = env_u16("JARVIS_BRIDGE_PORT") { self.bridge_port = Some(v); }
+        if let Some(v) = env_str("JARVIS_TTS_VOICE") { self.tts_voice = Some(v); }
+        if let Some(v) = env_str("JARVIS_OPENAI_MODEL") { self.openai_model = Some(v); }
+        if let Some(v) = env_str("JARVIS_LANGUAGE") { self.language = Some(v); }
+        if let Some(v) = env_str("JARVIS_INTENT_MODEL") { self.intent_model = Some(v); }
+        if let Some(v) = env_str("JARVIS_SYSTEM_PROMPT") { self.system_prompt = Some(v); }
+        if let Some(v) = env_str("JARVIS_INTENT_PROMPT") { self.intent_prompt = Some(v); }
+        if let Some(v) = env_u32("JARVIS_MAX_RESPONSE_TOKENS") { self.max_response_tokens = Some(v); }
+        if let Some(v) = env_f32("JARVIS_TEMPERATURE") { self.temperature = Some(v); }
+        if let Some(v) = env_str("JARVIS_RESPONSE_MODE") { self.response_mode = Some(v); }
+        if let Some(v) = env_bool("JARVIS_RECORD_VIDEO") { self.record_video = Some(v); }
+        // Tools from env: JSON array string
+        if let Some(v) = env_str("JARVIS_TOOLS") {
+            if let Ok(tools) = serde_json::from_str(&v) {
+                self.tools = Some(tools);
+            }
+        }
     }
 }
 
