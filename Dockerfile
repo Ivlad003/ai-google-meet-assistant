@@ -101,7 +101,7 @@ ENV HOME=/home/pwuser
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -f http://localhost:8080/ && xdpyinfo -display :99 >/dev/null 2>&1 || exit 1
+    CMD curl -f http://localhost:8080/health && xdpyinfo -display :99 >/dev/null 2>&1 || exit 1
 
 # Entrypoint runs as root to start Xvfb/PulseAudio, then drops to pwuser via gosu
 RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
