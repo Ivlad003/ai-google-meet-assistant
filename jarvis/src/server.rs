@@ -52,12 +52,16 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/tools/generate", post(generate_tool))
         .merge(sessions);
 
+    // Health endpoint bypasses auth (needed for Traefik/Dokploy health checks)
+    let health = Router::new().route("/health", get(|| async { "ok" }));
+
     // Apply basic auth middleware if enabled
     if state.auth_enabled {
         app.layer(axum::middleware::from_fn_with_state(state.clone(), basic_auth_middleware))
             .with_state(state)
+            .merge(health)
     } else {
-        app.with_state(state)
+        app.with_state(state).merge(health)
     }
 }
 
