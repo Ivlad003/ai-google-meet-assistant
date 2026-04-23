@@ -35,6 +35,7 @@ pub struct SessionInfo {
     pub video_size: Option<u64>,
     pub transcript_size: Option<u64>,
     pub video_format: Option<String>,
+    pub live: bool,
 }
 
 #[derive(Serialize)]
@@ -113,7 +114,9 @@ fn scan_sessions_sync(sessions_dir: &StdPath) -> Vec<SessionInfo> {
     };
 
     let now = std::time::SystemTime::now();
+    // Track which sessions have recently modified files (likely still being written to)
     let mut groups: HashMap<String, Vec<(String, u64)>> = HashMap::new();
+    let mut recently_modified: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -130,13 +133,12 @@ fn scan_sessions_sync(sessions_dir: &StdPath) -> Vec<SessionInfo> {
             continue;
         }
 
-        let modified = match entry.metadata().and_then(|m| m.modified()) {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-        if let Ok(elapsed) = now.duration_since(modified) {
-            if elapsed.as_secs() < 60 {
-                continue;
+        // Track if any file in this session was modified recently (live session)
+        if let Ok(modified) = entry.metadata().and_then(|m| m.modified()) {
+            if let Ok(elapsed) = now.duration_since(modified) {
+                if elapsed.as_secs() < 60 {
+                    recently_modified.insert(prefix.to_string());
+                }
             }
         }
 
@@ -180,9 +182,10 @@ fn scan_sessions_sync(sessions_dir: &StdPath) -> Vec<SessionInfo> {
 
             let date = format_session_date(&id);
 
+            let live = recently_modified.contains(&id);
             SessionInfo {
                 id, date, preview, has_audio, has_video, has_transcript,
-                audio_size, video_size, transcript_size, video_format,
+                audio_size, video_size, transcript_size, video_format, live,
             }
         })
         .collect();
