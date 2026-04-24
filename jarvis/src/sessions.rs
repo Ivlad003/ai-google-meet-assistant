@@ -509,7 +509,85 @@ async fn get_audio(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<axum::response::Response, StatusCode> {
-    serve_file(&state, &id, &["wav"], &["audio/wav"], &headers).await
+    if !is_valid_session_id(&id) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let file_path = sessions_dir(&state).join(format!("{}.wav", id));
+    let file_size = tokio::fs::metadata(&file_path)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?
+        .len();
+
+    if file_size <= 44 {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    // Read full file and fix WAV header if needed (live sessions have zero-size headers)
+    let mut data = tokio::fs::read(&file_path)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if data.len() > 44 && &data[0..4] == b"RIFF" && &data[8..12] == b"WAVE" {
+        let riff_size = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        let data_size = u32::from_le_bytes([data[40], data[41], data[42], data[43]]);
+        if riff_size == 0 || data_size == 0 {
+            let actual_data_size = (data.len() - 44) as u32;
+            let actual_riff_size = actual_data_size + 36;
+            data[4..8].copy_from_slice(&actual_riff_size.to_le_bytes());
+            data[40..44].copy_from_slice(&actual_data_size.to_le_bytes());
+        }
+    }
+
+    let patched_size = data.len();
+
+    if let Some(range_header) = headers.get(header::RANGE) {
+        // Handle Range request on the patched data
+        let range_str = range_header.to_str().map_err(|_| StatusCode::BAD_REQUEST)?;
+        let range_str = range_str.strip_prefix("bytes=").ok_or(StatusCode::RANGE_NOT_SATISFIABLE)?;
+        let parts: Vec<&str> = range_str.splitn(2, '-').collect();
+        if parts.len() != 2 { return Err(StatusCode::RANGE_NOT_SATISFIABLE); }
+
+        let start: usize = if parts[0].is_empty() {
+            let suffix: usize = parts[1].parse().map_err(|_| StatusCode::RANGE_NOT_SATISFIABLE)?;
+            patched_size.saturating_sub(suffix)
+        } else {
+            parts[0].parse().map_err(|_| StatusCode::RANGE_NOT_SATISFIABLE)?
+        };
+        let end: usize = if parts[1].is_empty() || parts[0].is_empty() {
+            patched_size - 1
+        } else {
+            parts[1].parse().map_err(|_| StatusCode::RANGE_NOT_SATISFIABLE)?
+        };
+
+        if start > end || start >= patched_size {
+            return Err(StatusCode::RANGE_NOT_SATISFIABLE);
+        }
+        let end = end.min(patched_size - 1);
+        let slice = data[start..=end].to_vec();
+
+        let cr = format!("bytes {}-{}/{}", start, end, patched_size);
+        Ok((
+            StatusCode::PARTIAL_CONTENT,
+            [
+                (header::CONTENT_TYPE, HeaderValue::from_static("audio/wav")),
+                (header::CONTENT_LENGTH, HeaderValue::from_str(&slice.len().to_string()).unwrap()),
+                (header::CONTENT_RANGE, HeaderValue::from_str(&cr).unwrap()),
+                (header::ACCEPT_RANGES, HeaderValue::from_static("bytes")),
+            ],
+            Body::from(slice),
+        ).into_response())
+    } else {
+        Ok((
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, HeaderValue::from_static("audio/wav")),
+                (header::CONTENT_LENGTH, HeaderValue::from_str(&patched_size.to_string()).unwrap()),
+                (header::ACCEPT_RANGES, HeaderValue::from_static("bytes")),
+            ],
+            Body::from(data),
+        ).into_response())
+    }
 }
 
 async fn get_video(
