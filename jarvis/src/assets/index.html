@@ -345,6 +345,8 @@ async function saveConfig() {
 
 async function joinMeeting() {
   try {
+    // Save config first so record_video and other settings take effect
+    await saveConfig();
     const r = await fetch('/api/join', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({meet_url: $('meet-url').value}) });
     const res = await r.json();
     if (res.ok) toast(res.message); else toast('Join failed: ' + res.message);
