@@ -540,12 +540,18 @@ async function openSession(id) {
     detail.innerHTML = html;
 
     try {
-      const vr = await fetch('/api/sessions/' + encodeURIComponent(id) + '/video', { method: 'HEAD' });
+      const videoUrl = '/api/sessions/' + encodeURIComponent(id) + '/video';
+      const vr = await fetch(videoUrl, { method: 'HEAD' });
       if (vr.ok) {
         const ct = vr.headers.get('content-type') || '';
         $('video-download').style.display = '';
-        if (ct.includes('webm')) {
-          $('session-video').src = '/api/sessions/' + encodeURIComponent(id) + '/video';
+        // Show player for browser-playable formats (webm, mp4)
+        if (ct.includes('webm') || ct.includes('mp4') || ct.includes('video')) {
+          const video = $('session-video');
+          video.src = videoUrl;
+          if (ct.includes('matroska') || ct.includes('mkv')) {
+            video.type = 'video/x-matroska';
+          }
           $('video-section').style.display = '';
         }
       }
