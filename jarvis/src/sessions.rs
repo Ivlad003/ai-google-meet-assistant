@@ -20,8 +20,14 @@ const MAX_RANGE_BYTES: u64 = 8 * 1024 * 1024;
 /// Max chat message length (characters)
 const MAX_CHAT_MESSAGE_LEN: usize = 10_000;
 
-/// Max chat history entries
-const MAX_CHAT_HISTORY: usize = 50;
+/// Max chat history entries (keep recent to avoid context overflow)
+const MAX_CHAT_HISTORY: usize = 10;
+
+/// Max transcript bytes to include in chat context
+const MAX_TRANSCRIPT_BYTES: usize = 60_000;
+
+/// Max tokens for chat LLM responses (reasoning models need headroom for internal reasoning)
+const CHAT_MAX_TOKENS: u32 = 4000;
 
 #[derive(Serialize)]
 pub struct SessionInfo {
@@ -263,8 +269,12 @@ async fn do_chat(
 
     let model = state.config.read().await.openai_model.clone();
 
+    // Keep only recent history to avoid context overflow
+    let history_len = history.len();
+    let skip = if history_len > MAX_CHAT_HISTORY { history_len - MAX_CHAT_HISTORY } else { 0 };
     let mut messages: Vec<(String, String)> = history
         .iter()
+        .skip(skip)
         .take(MAX_CHAT_HISTORY)
         .map(|m| (m.role.clone(), m.content.clone()))
         .collect();
@@ -277,7 +287,7 @@ async fn do_chat(
         system,
         messages,
         0.7,
-        1000,
+        CHAT_MAX_TOKENS,
     )
     .await
     {
@@ -635,7 +645,7 @@ async fn session_chat(
     let system = format!(
         "You are a helpful assistant analyzing a meeting transcript. \
          Answer questions based on the following transcript:\n\n{}{}",
-        truncate_text(&transcript, 12000),
+        truncate_text(&transcript, MAX_TRANSCRIPT_BYTES),
         tools_section
     );
 
