@@ -285,11 +285,21 @@ async fn join_meeting(
     let cfg = state.config.read().await;
     let bridge_url = format!("ws://localhost:{}/ws", cfg.bridge_port);
     let bot_name = cfg.bot_name.clone();
+    let record_video = cfg.record_video;
     drop(cfg);
+
+    // Generate video output path if recording is enabled
+    let video_path = if record_video {
+        let ts = chrono::Local::now().format("%Y-%m-%d_%H%M%S");
+        let p = state.data_dir.join("sessions").join(format!("{}.webm", ts));
+        p.to_string_lossy().to_string()
+    } else {
+        String::new()
+    };
 
     // Start the process
     let mut proc = state.bot_process.lock().unwrap();
-    match proc.start(&node_path, &vexa_bot_dir, &bridge_url, &meet_url, &bot_name, false, "", false) {
+    match proc.start(&node_path, &vexa_bot_dir, &bridge_url, &meet_url, &bot_name, record_video, &video_path, false) {
         Ok(()) => Json(ActionResponse {
             ok: true,
             message: format!("Joining meeting: {}", meet_url),
