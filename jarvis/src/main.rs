@@ -11,6 +11,7 @@ mod db;
 mod llm;
 mod process;
 mod server;
+mod session_manager;
 mod sessions;
 mod tools;
 mod transcription;
@@ -185,45 +186,16 @@ async fn main() -> anyhow::Result<()> {
     // Create transcript broadcast channel
     let (transcript_tx, _) = tokio::sync::broadcast::channel::<String>(256);
 
-    // Create session transcript and audio files
+    // Create sessions directory
     let sessions_dir = cfg.data_dir.join("sessions");
     std::fs::create_dir_all(&sessions_dir).ok();
 
     // Repair any WAV files left with broken headers from previous hard kills
     repair_wav_files(&sessions_dir);
 
-    let session_ts = chrono::Local::now().format("%Y-%m-%d_%H%M%S");
-    let session_transcript_path = sessions_dir.join(format!("{}.txt", session_ts));
-    let session_audio_path = sessions_dir.join(format!("{}.wav", session_ts));
-    tracing::info!("Session transcript: {}", session_transcript_path.display());
-    tracing::info!("Session audio: {}", session_audio_path.display());
-
-    // Video recording setup
-    let session_video_path = if cfg.record_video {
-        let path = sessions_dir.join(format!("{}.webm", session_ts));
-        tracing::info!("Session video: {}", path.display());
-        Some(path)
-    } else {
-        None
-    };
-
-    let session_file = Arc::new(tokio::sync::Mutex::new(
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&session_transcript_path)?,
-    ));
-
-    // WAV writer for audio recording (16kHz mono 16-bit PCM)
-    let wav_spec = hound::WavSpec {
-        channels: 1,
-        sample_rate: 16000,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let wav_writer = Arc::new(tokio::sync::Mutex::new(
-        hound::WavWriter::create(&session_audio_path, wav_spec)?,
-    ));
+    // SessionManager owns transcript/audio/video file lifecycle. Each Join
+    // creates a fresh session keyed off a new timestamp.
+    let session_manager = session_manager::SessionManager::new(sessions_dir.clone());
 
     // Create process manager
     let bot_process = Arc::new(Mutex::new(process::VexaBotProcess::new()));
@@ -245,6 +217,7 @@ async fn main() -> anyhow::Result<()> {
         auth_enabled: cfg.auth_enabled,
         auth_user: cfg.auth_user.clone(),
         auth_password: cfg.auth_password.clone(),
+        session_manager: session_manager.clone(),
     });
 
     let web_router = server::router(app_state);
@@ -266,8 +239,7 @@ async fn main() -> anyhow::Result<()> {
     let agent_clone = agent.clone();
     let tts_clone = tts_service.clone();
     let transcript_tx_clone = transcript_tx.clone();
-    let session_file_clone = session_file.clone();
-    let wav_writer_clone = wav_writer.clone();
+    let session_manager_clone = session_manager.clone();
     let tools_list = Arc::new(cfg.tools.clone());
     let http_client = Arc::new(reqwest::Client::new());
     let response_mode_rx = response_mode_rx;
@@ -278,18 +250,12 @@ async fn main() -> anyhow::Result<()> {
         let mut total_samples_written: u64 = 0;
 
         while let Some(samples) = audio_rx.recv().await {
-            // Write all audio samples to WAV file
-            {
-                let mut writer = wav_writer_clone.lock().await;
-                for &s in &samples {
-                    let sample_i16 = (s * 32767.0).clamp(-32768.0, 32767.0) as i16;
-                    let _ = writer.write_sample(sample_i16);
-                }
-                total_samples_written += samples.len() as u64;
-            }
+            // Write all audio samples to the active session's WAV (if any)
+            session_manager_clone.write_audio_samples(&samples).await;
+            total_samples_written += samples.len() as u64;
             // Log first few receives and periodically
             if total_samples_written == samples.len() as u64 || total_samples_written % (16000 * 30) < samples.len() as u64 {
-                tracing::info!("[audio] total samples written to WAV: {} ({:.1}s)", total_samples_written, total_samples_written as f64 / 16000.0);
+                tracing::info!("[audio] total samples received: {} ({:.1}s)", total_samples_written, total_samples_written as f64 / 16000.0);
             }
 
             buffer.extend_from_slice(&samples);
@@ -315,14 +281,10 @@ async fn main() -> anyhow::Result<()> {
 
                         tracing::info!("[transcript] [{}] {}", speaker_label, seg.text);
 
-                        // Write to session transcript file
-                        {
-                            use std::io::Write;
-                            let ts = chrono::Local::now().format("%H:%M:%S");
-                            let mut f = session_file_clone.lock().await;
-                            let _ = writeln!(f, "[{}] [{}] {}", ts, speaker_label, seg.text);
-                            let _ = f.flush();
-                        }
+                        // Write to active session's transcript file
+                        let ts = chrono::Local::now().format("%H:%M:%S");
+                        let transcript_line = format!("[{}] [{}] {}", ts, speaker_label, seg.text);
+                        session_manager_clone.write_transcript_line(&transcript_line).await;
 
                         // Broadcast transcript line to WebSocket clients
                         let line = format!("[{}] {}", speaker_label, seg.text);
@@ -367,7 +329,7 @@ async fn main() -> anyhow::Result<()> {
                                             let http_client = http_client.clone();
                                             let agent_bg = agent_clone.clone();
                                             let tts_bg = tts_clone.clone();
-                                            let session_file_bg = session_file_clone.clone();
+                                            let session_manager_bg = session_manager_clone.clone();
                                             let bridge_bg = bridge_for_tx.clone();
                                             tokio::spawn(async move {
                                                 let result = tools::execute_tool(&tool, &params, &http_client).await;
@@ -384,14 +346,10 @@ async fn main() -> anyhow::Result<()> {
                                                     }
                                                 };
 
-                                                // Write bot response to session file
-                                                {
-                                                    use std::io::Write;
-                                                    let ts = chrono::Local::now().format("%H:%M:%S");
-                                                    let mut f = session_file_bg.lock().await;
-                                                    let _ = writeln!(f, "[{}] [Jarvis] {}", ts, spoken_text);
-                                                    let _ = f.flush();
-                                                }
+                                                // Write bot response to active session's transcript
+                                                let ts = chrono::Local::now().format("%H:%M:%S");
+                                                let line = format!("[{}] [Jarvis] {}", ts, spoken_text);
+                                                session_manager_bg.write_transcript_line(&line).await;
 
                                                 // Synthesize TTS audio
                                                 match tts_bg.synthesize(&spoken_text).await {
@@ -410,13 +368,9 @@ async fn main() -> anyhow::Result<()> {
                                             let spoken_text = format!("I don't have a tool called {}.", tool_name);
 
                                             // Write + TTS for unknown tool
-                                            {
-                                                use std::io::Write;
-                                                let ts = chrono::Local::now().format("%H:%M:%S");
-                                                let mut f = session_file_clone.lock().await;
-                                                let _ = writeln!(f, "[{}] [Jarvis] {}", ts, spoken_text);
-                                                let _ = f.flush();
-                                            }
+                                            let ts = chrono::Local::now().format("%H:%M:%S");
+                                            let line = format!("[{}] [Jarvis] {}", ts, spoken_text);
+                                            session_manager_clone.write_transcript_line(&line).await;
                                             match tts_clone.synthesize(&spoken_text).await {
                                                 Ok(wav_bytes) => {
                                                     let audio_b64 = base64::engine::general_purpose::STANDARD.encode(&wav_bytes);
@@ -431,14 +385,10 @@ async fn main() -> anyhow::Result<()> {
                                         // Track bot response in transcript for context
                                         agent_clone.add_bot_response_to_transcript(&answer);
 
-                                        // Write bot response to session file
-                                        {
-                                            use std::io::Write;
-                                            let ts = chrono::Local::now().format("%H:%M:%S");
-                                            let mut f = session_file_clone.lock().await;
-                                            let _ = writeln!(f, "[{}] [Jarvis] {}", ts, answer);
-                                            let _ = f.flush();
-                                        }
+                                        // Write bot response to active session's transcript
+                                        let ts = chrono::Local::now().format("%H:%M:%S");
+                                        let line = format!("[{}] [Jarvis] {}", ts, answer);
+                                        session_manager_clone.write_transcript_line(&line).await;
 
                                         // Synthesize TTS audio
                                         match tts_clone.synthesize(&answer).await {
@@ -470,19 +420,30 @@ async fn main() -> anyhow::Result<()> {
             Ok(node_path) => {
                 match process::find_vexa_bot_dir() {
                     Ok(vexa_bot_dir) => {
-                        let bridge_url = format!("ws://localhost:{}/ws", cfg.bridge_port);
-                        let mut proc = bot_process.lock().unwrap();
-                        if let Err(e) = proc.start(
-                            &node_path,
-                            &vexa_bot_dir,
-                            &bridge_url,
-                            meet_url,
-                            &cfg.bot_name,
-                            cfg.record_video,
-                            session_video_path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default().as_str(),
-                            false,
-                        ) {
-                            tracing::error!("[process] failed to start vexa-bot: {}", e);
+                        // Open a fresh session for this auto-start so transcript/audio/video
+                        // share a single timestamp.
+                        match session_manager.start_new(cfg.record_video).await {
+                            Ok(info) => {
+                                let bridge_url = format!("ws://localhost:{}/ws", cfg.bridge_port);
+                                let video_path = info.video_path
+                                    .as_ref()
+                                    .map(|p| p.to_string_lossy().to_string())
+                                    .unwrap_or_default();
+                                let mut proc = bot_process.lock().unwrap();
+                                if let Err(e) = proc.start(
+                                    &node_path,
+                                    &vexa_bot_dir,
+                                    &bridge_url,
+                                    meet_url,
+                                    &cfg.bot_name,
+                                    cfg.record_video,
+                                    &video_path,
+                                    false,
+                                ) {
+                                    tracing::error!("[process] failed to start vexa-bot: {}", e);
+                                }
+                            }
+                            Err(e) => tracing::error!("[session] failed to start session: {}", e),
                         }
                     }
                     Err(e) => tracing::warn!("[process] vexa-bot dir not found: {}", e),
@@ -527,37 +488,30 @@ async fn main() -> anyhow::Result<()> {
         let _ = proc.stop();
     }
 
-    // Abort the audio task so it drops its Arc<wav_writer> clone
+    // Abort the audio task so the SessionManager lock is released for finalize
     audio_task.abort();
     let _ = audio_task.await;
 
-    // Finalize WAV file — try explicit finalize, otherwise Drop handles it
-    match Arc::try_unwrap(wav_writer) {
-        Ok(writer) => {
-            let writer = writer.into_inner();
-            if let Err(e) = writer.finalize() {
-                tracing::warn!("Failed to finalize WAV file: {}", e);
-            } else {
-                tracing::info!("Audio file finalized: {}", session_audio_path.display());
-            }
-        }
-        Err(arc) => {
-            // Drop the Arc — WavWriter::drop() calls finalize() automatically
-            tracing::info!("Finalizing WAV via drop...");
-            drop(arc);
-        }
-    }
+    // Capture session info before finalizing for path printing
+    let final_session = session_manager.current_info().await;
+
+    // Finalize current session (closes WAV header, flushes transcript)
+    session_manager.end_current().await;
 
     // Print session file paths to terminal
     println!();
     println!("=== Session Complete ===");
-    println!("Transcript: {}", session_transcript_path.display());
-    println!("Audio:      {}", session_audio_path.display());
-    if let Some(ref video_path) = session_video_path {
-        let final_path = bridge_state.video_ready_path.lock().await.clone();
-        let default_path = video_path.to_string_lossy().to_string();
-        let display_path = final_path.as_deref().unwrap_or(&default_path);
-        println!("Video:      {}", display_path);
+    if let Some(info) = final_session {
+        println!("Transcript: {}", info.transcript_path.display());
+        println!("Audio:      {}", info.audio_path.display());
+        if let Some(ref video_path) = info.video_path {
+            let final_path = bridge_state.video_ready_path.lock().await.clone();
+            let default_path = video_path.to_string_lossy().to_string();
+            let display_path = final_path.as_deref().unwrap_or(&default_path);
+            println!("Video:      {}", display_path);
+        }
+    } else {
+        println!("(no active session)");
     }
     println!("Logs:       {}", logs_dir.display());
     println!("========================");

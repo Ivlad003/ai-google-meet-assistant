@@ -19,6 +19,7 @@ use crate::bot_bridge::BridgeState;
 use crate::config::Config;
 use crate::llm::LlmAgent;
 use crate::process;
+use crate::session_manager::SessionManager;
 
 #[derive(Embed)]
 #[folder = "src/assets/"]
@@ -37,6 +38,7 @@ pub struct AppState {
     pub auth_enabled: bool,
     pub auth_user: String,
     pub auth_password: String,
+    pub session_manager: Arc<SessionManager>,
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -288,21 +290,40 @@ async fn join_meeting(
     let record_video = cfg.record_video;
     drop(cfg);
 
-    // Generate video output path if recording is enabled
-    let video_path = if record_video {
-        let ts = chrono::Local::now().format("%Y-%m-%d_%H%M%S");
-        let p = state.data_dir.join("sessions").join(format!("{}.webm", ts));
-        p.to_string_lossy().to_string()
-    } else {
-        String::new()
+    // If a previous bot is running, gracefully shut it down so playwright finalizes video.
+    let was_running = state
+        .bot_process
+        .lock()
+        .map(|mut p| p.is_running())
+        .unwrap_or(false);
+    if was_running {
+        graceful_shutdown_bot(&state).await;
+    }
+
+    // Open a new session — this finalizes any prior session and creates fresh
+    // transcript/audio/video paths under a single timestamp.
+    let session_info = match state.session_manager.start_new(record_video).await {
+        Ok(info) => info,
+        Err(e) => {
+            return Json(ActionResponse {
+                ok: false,
+                message: format!("Failed to start session: {}", e),
+            });
+        }
     };
 
-    // Start the process
+    let video_path = session_info
+        .video_path
+        .as_ref()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    // Start the bot process with the session-aligned video path
     let mut proc = state.bot_process.lock().unwrap();
     match proc.start(&node_path, &vexa_bot_dir, &bridge_url, &meet_url, &bot_name, record_video, &video_path, false) {
         Ok(()) => Json(ActionResponse {
             ok: true,
-            message: format!("Joining meeting: {}", meet_url),
+            message: format!("Joining meeting: {} (session {})", meet_url, session_info.id),
         }),
         Err(e) => Json(ActionResponse {
             ok: false,
@@ -312,23 +333,69 @@ async fn join_meeting(
 }
 
 async fn leave_meeting(State(state): State<Arc<AppState>>) -> Json<ActionResponse> {
-    let mut proc = state.bot_process.lock().unwrap();
-    if !proc.is_running() {
+    let running = state
+        .bot_process
+        .lock()
+        .map(|mut p| p.is_running())
+        .unwrap_or(false);
+    if !running {
+        // No bot, but still finalize any open session so files don't stay open.
+        state.session_manager.end_current().await;
         return Json(ActionResponse {
             ok: false,
             message: "Bot is not currently in a meeting".to_string(),
         });
     }
 
-    match proc.stop() {
-        Ok(()) => Json(ActionResponse {
-            ok: true,
-            message: "Left meeting".to_string(),
-        }),
-        Err(e) => Json(ActionResponse {
-            ok: false,
-            message: format!("Failed to stop vexa-bot: {}", e),
-        }),
+    graceful_shutdown_bot(&state).await;
+    let session = state.session_manager.end_current().await;
+
+    let msg = match session {
+        Some(info) => format!("Left meeting (session {} finalized)", info.id),
+        None => "Left meeting".to_string(),
+    };
+    Json(ActionResponse {
+        ok: true,
+        message: msg,
+    })
+}
+
+/// Send a graceful Shutdown command via the bridge and wait briefly for the bot
+/// to disconnect on its own (so playwright can finalize the video file). Force
+/// kills the process if it doesn't exit within the timeout.
+async fn graceful_shutdown_bot(state: &Arc<AppState>) {
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+
+    if state
+        .bridge_state
+        .connection_count
+        .load(Ordering::Relaxed)
+        > 0
+    {
+        let _ = state
+            .bridge_state
+            .command_tx
+            .send(crate::bot_bridge::CoreMessage::Shutdown);
+
+        // Wait up to 10s for the bot to disconnect after finalizing video.
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(10) {
+            if state
+                .bridge_state
+                .connection_count
+                .load(Ordering::Relaxed)
+                == 0
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    // Force kill in case the bot is still around (or never connected).
+    if let Ok(mut proc) = state.bot_process.lock() {
+        let _ = proc.stop();
     }
 }
 
