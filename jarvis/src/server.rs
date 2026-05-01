@@ -320,7 +320,7 @@ async fn join_meeting(
 
     // Start the bot process with the session-aligned video path
     let mut proc = state.bot_process.lock().unwrap();
-    match proc.start(&node_path, &vexa_bot_dir, &bridge_url, &meet_url, &bot_name, record_video, &video_path, false) {
+    match proc.start(&node_path, &vexa_bot_dir, &bridge_url, &meet_url, &bot_name, record_video, &video_path) {
         Ok(()) => Json(ActionResponse {
             ok: true,
             message: format!("Joining meeting: {} (session {})", meet_url, session_info.id),
@@ -378,9 +378,12 @@ async fn graceful_shutdown_bot(state: &Arc<AppState>) {
             .command_tx
             .send(crate::bot_bridge::CoreMessage::Shutdown);
 
-        // Wait up to 10s for the bot to disconnect after finalizing video.
+        // Wait up to 30s for the bot to disconnect after finalizing video.
+        // performGracefulLeave does platform-leave (+2s pause) → voice agent cleanup
+        // → page close → finalizeVideo (1s wait + ffmpeg/rename), which can easily
+        // exceed 10s; if we kill earlier Playwright never flushes the webm.
         let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(10) {
+        while start.elapsed() < Duration::from_secs(30) {
             if state
                 .bridge_state
                 .connection_count

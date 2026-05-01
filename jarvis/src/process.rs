@@ -21,8 +21,10 @@ impl VexaBotProcess {
         bot_name: &str,
         record_video: bool,
         video_output_path: &str,
-        ffmpeg_available: bool,
     ) -> anyhow::Result<()> {
+        // Detect ffmpeg at runtime — Docker image ships with it, native installs may not.
+        // Without this, vexa-bot skips the MKV remux and only does a rename fallback.
+        let ffmpeg_available = is_ffmpeg_available();
         if self.is_running() {
             self.stop()?;
         }
@@ -139,6 +141,18 @@ impl Drop for VexaBotProcess {
             let _ = child.start_kill();
         }
     }
+}
+
+/// Detect whether `ffmpeg` is available on PATH. Used to tell vexa-bot whether
+/// it can remux Playwright's webm to MKV vs. fall back to a plain rename.
+fn is_ffmpeg_available() -> bool {
+    std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 /// Find Node.js binary. Checks:

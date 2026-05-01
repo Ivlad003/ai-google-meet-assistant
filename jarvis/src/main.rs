@@ -438,7 +438,6 @@ async fn main() -> anyhow::Result<()> {
                                     &cfg.bot_name,
                                     cfg.record_video,
                                     &video_path,
-                                    false,
                                 ) {
                                     tracing::error!("[process] failed to start vexa-bot: {}", e);
                                 }
@@ -474,9 +473,10 @@ async fn main() -> anyhow::Result<()> {
     if bridge_state.connection_count.load(std::sync::atomic::Ordering::Relaxed) > 0 {
         tracing::info!("Sending shutdown command to vexa-bot...");
         let _ = bridge_state.command_tx.send(bot_bridge::CoreMessage::Shutdown);
-        // Wait up to 10 seconds for vexa-bot to disconnect (video finalization may take a few seconds)
+        // Wait up to 30 seconds for vexa-bot to disconnect — performGracefulLeave does
+        // platform-leave + cleanup + page close + finalizeVideo, which can exceed 10s.
         let start = std::time::Instant::now();
-        while start.elapsed() < std::time::Duration::from_secs(10) {
+        while start.elapsed() < std::time::Duration::from_secs(30) {
             if bridge_state.connection_count.load(std::sync::atomic::Ordering::Relaxed) == 0 {
                 break;
             }
