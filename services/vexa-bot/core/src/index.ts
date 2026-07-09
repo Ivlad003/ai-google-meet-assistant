@@ -1286,11 +1286,12 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
 
     const headless = process.env.HEADLESS === 'true' || process.env.HEADLESS === '1';
     const inBridgeMode = !!process.env.BRIDGE_URL;
-    browserInstance = await chromium.launch({
-      headless,
-      args: getBrowserArgs(!!botConfig.voiceAgentEnabled, inBridgeMode),
-    });
-    log(`Browser launched in ${headless ? 'headless' : 'headed'} mode${inBridgeMode ? ' (bridge/mute-audio)' : ''}`);
+    // Authenticated mode: when a persistent profile dir is configured, reuse a
+    // logged-in Chrome profile. Google Meet blocks anonymous automated joins
+    // ("You can't join this video call") via reCAPTCHA Enterprise; a signed-in
+    // account is the reliable way past it. Empty/not-logged-in profile behaves
+    // like anonymous (still blocked) until the one-time login is done.
+    const profileDir = (process.env.BOT_PROFILE_DIR || '').trim();
 
     // Video recording setup
     const recordVideo = process.env.RECORD_VIDEO === 'true';
@@ -1300,21 +1301,40 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
       log(`[Video] Recording enabled, temp dir: ${tempVideoDir}`);
     }
 
-    // Create a new page with permissions and viewport for non-Teams
-    const context = await browserInstance.newContext({
+    const contextOptions: any = {
       permissions: ["camera", "microphone"],
-      userAgent: userAgent,
-      viewport: {
-        width: 1280,
-        height: 720
-      },
+      viewport: { width: 1280, height: 720 },
       ...(recordVideo && tempVideoDir ? {
-        recordVideo: {
-          dir: tempVideoDir,
-          size: { width: 1280, height: 720 }
-        }
+        recordVideo: { dir: tempVideoDir, size: { width: 1280, height: 720 } }
       } : {}),
-    });
+    };
+
+    let context;
+    if (profileDir) {
+      fs.mkdirSync(profileDir, { recursive: true });
+      // --incognito would defeat the persistent profile (cookies/session would
+      // not persist), so strip it in authenticated mode. Do NOT spoof userAgent
+      // here — a signed-in real Chrome UA is less suspicious than a mismatch.
+      const persistentArgs = getBrowserArgs(!!botConfig.voiceAgentEnabled, inBridgeMode)
+        .filter((a) => a !== '--incognito');
+      context = await chromium.launchPersistentContext(profileDir, {
+        headless,
+        args: persistentArgs,
+        ...contextOptions,
+      });
+      browserInstance = context.browser();
+      log(`Persistent authenticated context launched (profile: ${profileDir})`);
+    } else {
+      browserInstance = await chromium.launch({
+        headless,
+        args: getBrowserArgs(!!botConfig.voiceAgentEnabled, inBridgeMode),
+      });
+      context = await browserInstance.newContext({
+        userAgent: userAgent,
+        ...contextOptions,
+      });
+    }
+    log(`Browser launched in ${headless ? 'headless' : 'headed'} mode${inBridgeMode ? ' (bridge/mute-audio)' : ''}${profileDir ? ' (authenticated profile)' : ''}`);
 
     // Set bridge mode flag — echo prevention is handled by --mute-audio Chrome flag
     // Audio capture in bridge mode bypasses DOM elements entirely, reading directly
@@ -1335,7 +1355,11 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
       log(`[Bot] Warning: addInitScript failed: ${e.message}`);
     }
 
-    page = await context.newPage();
+    // launchPersistentContext opens with an initial page; reuse it so init
+    // scripts (added above) still apply to the first navigation.
+    page = profileDir
+      ? (context.pages()[0] || await context.newPage())
+      : await context.newPage();
   }
 
   // Forward browser console messages tagged [Vexa] to Node.js log

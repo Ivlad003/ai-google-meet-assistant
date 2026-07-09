@@ -114,6 +114,15 @@ async fn main() -> anyhow::Result<()> {
     };
     let cfg = config::Config::from_file(&config_file);
 
+    // Export the signed-in bot profile dir so the spawned vexa-bot (which reads
+    // BOT_PROFILE_DIR and inherits our environment) uses the authenticated
+    // Chrome profile. Config value wins; an already-set env var is left intact.
+    if let Some(ref profile_dir) = cfg.bot_profile_dir {
+        if std::env::var("BOT_PROFILE_DIR").ok().filter(|s| !s.is_empty()).is_none() {
+            std::env::set_var("BOT_PROFILE_DIR", profile_dir);
+        }
+    }
+
     // Set up file logging
     let logs_dir = cfg.data_dir.join("logs");
     std::fs::create_dir_all(&logs_dir).ok();

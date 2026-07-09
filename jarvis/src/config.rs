@@ -21,6 +21,10 @@ pub struct ConfigFile {
     pub temperature: Option<f32>,
     pub response_mode: Option<String>,
     pub record_video: Option<bool>,
+    /// Persistent Chrome profile dir for a signed-in bot account. When set, the
+    /// bot reuses this logged-in profile so Google Meet accepts it (anonymous
+    /// automated joins are blocked). Produce it via `npm run login`.
+    pub bot_profile_dir: Option<String>,
     #[serde(default)]
     pub tools: Option<Vec<super::tools::ToolDef>>,
     pub auth_enabled: Option<bool>,
@@ -89,6 +93,7 @@ impl ConfigFile {
         if let Some(v) = env_f32("JARVIS_TEMPERATURE") { self.temperature = Some(v); }
         if let Some(v) = env_str("JARVIS_RESPONSE_MODE") { self.response_mode = Some(v); }
         if let Some(v) = env_bool("JARVIS_RECORD_VIDEO") { self.record_video = Some(v); }
+        if let Some(v) = env_str("BOT_PROFILE_DIR").or_else(|| env_str("JARVIS_BOT_PROFILE_DIR")) { self.bot_profile_dir = Some(v); }
         if let Some(v) = env_str("AUTH_USER") { self.auth_user = Some(v); }
         if let Some(v) = env_str("AUTH_PASSWORD") { self.auth_password = Some(v); }
         if let Some(v) = env_bool("AUTH_ENABLED") { self.auth_enabled = Some(v); }
@@ -122,6 +127,7 @@ pub struct Config {
     pub temperature: f32,
     pub response_mode: ResponseMode,
     pub record_video: bool,
+    pub bot_profile_dir: Option<String>,
     pub tools: Vec<super::tools::ToolDef>,
     pub auth_enabled: bool,
     pub auth_user: String,
@@ -179,6 +185,7 @@ impl Config {
                 _ => ResponseMode::Smart,
             },
             record_video: cf.record_video.unwrap_or(false),
+            bot_profile_dir: cf.bot_profile_dir.clone().filter(|s| !s.trim().is_empty()),
             tools: cf.tools.clone().unwrap_or_default(),
             auth_enabled: cf.auth_enabled.unwrap_or(false),
             auth_user: cf.auth_user.clone().unwrap_or_else(|| "admin".to_string()),

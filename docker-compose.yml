@@ -21,6 +21,10 @@ services:
       - TRANSCRIPTION_MODE=${TRANSCRIPTION_MODE:-}
       - MAX_RESPONSE_TOKENS=${MAX_RESPONSE_TOKENS:-}
       - JARVIS_RECORD_VIDEO=${RECORD_VIDEO:-false}
+      # Signed-in bot: point at a logged-in Chrome profile inside the volume so
+      # Google Meet accepts the bot (anonymous automated joins are blocked).
+      # Leave empty for anonymous mode. See docs/technical-details.md.
+      - BOT_PROFILE_DIR=${BOT_PROFILE_DIR:-}
       - AUTH_ENABLED=${AUTH_ENABLED:-false}
       - AUTH_USER=${AUTH_USER:-admin}
       - AUTH_PASSWORD=${AUTH_PASSWORD:-}

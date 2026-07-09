@@ -101,6 +101,48 @@ Note: `basicauth` is deprecated in Caddy 2.10+ — use `basic_auth` (with unders
 
 On shutdown, paths are printed to terminal.
 
+## Signed-In Bot (Google Meet)
+
+Google Meet blocks **anonymous** automated joins. After clicking "Join now" the
+bot lands on a **"You can't join this video call — No one can join a meeting
+unless invited or admitted by the host"** screen and is redirected ~60s later;
+the host never receives an admission request. This is Meet's abuse detection
+(reCAPTCHA Enterprise), not a selector or Docker problem — an anonymous human in
+incognito joins the same meeting instantly, but automation is scored and blocked.
+Stealth patches that beat Cloudflare/DataDome (verified: `navigator.webdriver`
+false, rebrowser `Runtime.enable` fix active) do **not** get past it.
+
+The reliable fix is to run the bot as a **signed-in Google account** using a
+persistent Chrome profile. When `BOT_PROFILE_DIR` is set, the bot launches with
+`launchPersistentContext(BOT_PROFILE_DIR)` (and drops `--incognito`), reusing the
+logged-in session so Meet treats it as an authenticated participant.
+
+### One-time login
+
+Use a **dedicated** Google account for the bot, not a personal one.
+
+```bash
+cd services/vexa-bot/core
+npm run build
+BOT_PROFILE_DIR=./chrome-profile npm run login   # opens Chrome; log in, press Enter
+```
+
+Do the login on the same network that runs the bot when possible — a session
+created on a home IP and used from a datacenter IP may trigger Google's
+"verify it's you" re-check.
+
+### Wiring it up
+
+- **Native:** set `bot_profile_dir` in `jarvis.config.json` (or export
+  `BOT_PROFILE_DIR`). Jarvis exports it so the spawned bot inherits it.
+- **Docker / Dokploy:** set `BOT_PROFILE_DIR=/data/jarvis/chrome-profile` and copy
+  the logged-in profile into that path inside the `jarvis-data` volume (it
+  persists across restarts). Empty/not-logged-in profile behaves like anonymous
+  (still blocked) until the login is present.
+
+Bot log confirms the mode: `Persistent authenticated context launched (profile: …)`.
+Sessions expire after weeks/months — re-run the login to refresh.
+
 ## Configuration Reference
 
 All settings in `jarvis.config.json`. Loads from current directory by default.
@@ -134,6 +176,7 @@ See `jarvis.config.example.json` for all options.
 | `max_response_tokens` | No | `150` | Max tokens in LLM response |
 | `temperature` | No | `0.7` | LLM temperature |
 | `response_mode` | No | `smart` | `smart` (LLM intent detection) or `name_only` (keyword match on bot name) |
+| `bot_profile_dir` | No | — | Logged-in Chrome profile dir for a signed-in bot account (see "Signed-In Bot"). Also via `BOT_PROFILE_DIR` env |
 | `system_prompt` | No | built-in | Custom system prompt |
 | `intent_prompt` | No | built-in | Custom intent prompt (`{bot_name}`, `{context}`, `{speaker}`, `{text}`) |
 | `tools` | No | `[]` | Custom tool integrations |

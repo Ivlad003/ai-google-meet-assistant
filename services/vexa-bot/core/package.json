@@ -9,7 +9,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsc && node build-browser-utils.js",
     "build-browser": "node build-browser-utils.js",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "login": "node dist/login.js"
   },
   "keywords": [],
   "author": "",
