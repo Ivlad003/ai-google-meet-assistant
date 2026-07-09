@@ -21,6 +21,25 @@ if ! xdpyinfo -display :99 >/dev/null 2>&1; then
 fi
 echo "[entrypoint] Xvfb ready"
 
+# --- Optional VNC (one-time Google login for the signed-in bot) ---
+# Set ENABLE_VNC=1 to expose the :99 display over VNC on port 5900, then run
+# `docker exec -it -u pwuser <container> /app/login.sh` to log in. Only reach
+# 5900 over an SSH tunnel to 127.0.0.1 — never publish it publicly. Prefer
+# setting VNC_PASSWORD. Turn ENABLE_VNC back off after logging in.
+if [ "${ENABLE_VNC:-0}" = "1" ] || [ "${ENABLE_VNC:-}" = "true" ]; then
+    echo "[entrypoint] ENABLE_VNC set — starting x11vnc on :99 (port 5900)..."
+    if [ -n "${VNC_PASSWORD:-}" ]; then
+        mkdir -p /tmp/.vnc
+        x11vnc -storepasswd "$VNC_PASSWORD" /tmp/.vnc/passwd >/dev/null 2>&1 || true
+        x11vnc -display :99 -forever -shared -rfbauth /tmp/.vnc/passwd -rfbport 5900 -bg -o /tmp/x11vnc.log >/dev/null 2>&1 || \
+            echo "[entrypoint] WARNING: x11vnc failed to start"
+    else
+        echo "[entrypoint] WARNING: VNC has no password (set VNC_PASSWORD). Expose only via SSH tunnel to 127.0.0.1."
+        x11vnc -display :99 -forever -shared -nopw -rfbport 5900 -bg -o /tmp/x11vnc.log >/dev/null 2>&1 || \
+            echo "[entrypoint] WARNING: x11vnc failed to start"
+    fi
+fi
+
 # --- PulseAudio ---
 echo "[entrypoint] Starting PulseAudio daemon..."
 # In Docker there's no login session, so use system mode with permissive access

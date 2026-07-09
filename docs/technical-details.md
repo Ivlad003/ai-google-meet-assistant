@@ -117,9 +117,13 @@ persistent Chrome profile. When `BOT_PROFILE_DIR` is set, the bot launches with
 `launchPersistentContext(BOT_PROFILE_DIR)` (and drops `--incognito`), reusing the
 logged-in session so Meet treats it as an authenticated participant.
 
-### One-time login
-
 Use a **dedicated** Google account for the bot, not a personal one.
+
+Chrome cookie encryption is OS/keyring-specific, so a profile created on one
+machine usually will **not** decrypt on another. Create the profile in the same
+environment that runs the bot.
+
+### One-time login — native (macOS/Linux with a display)
 
 ```bash
 cd services/vexa-bot/core
@@ -127,18 +131,29 @@ npm run build
 BOT_PROFILE_DIR=./chrome-profile npm run login   # opens Chrome; log in, press Enter
 ```
 
-Do the login on the same network that runs the bot when possible — a session
-created on a home IP and used from a datacenter IP may trigger Google's
-"verify it's you" re-check.
+Then set `bot_profile_dir` in `jarvis.config.json` (or export `BOT_PROFILE_DIR`).
+Jarvis exports it so the spawned bot inherits it.
 
-### Wiring it up
+### One-time login — Docker / Dokploy (headless server, via VNC)
 
-- **Native:** set `bot_profile_dir` in `jarvis.config.json` (or export
-  `BOT_PROFILE_DIR`). Jarvis exports it so the spawned bot inherits it.
-- **Docker / Dokploy:** set `BOT_PROFILE_DIR=/data/jarvis/chrome-profile` and copy
-  the logged-in profile into that path inside the `jarvis-data` volume (it
-  persists across restarts). Empty/not-logged-in profile behaves like anonymous
-  (still blocked) until the login is present.
+The server has no display, so log in inside the container over VNC. This creates
+the session on the server's IP with the container's cookie encryption — no
+portability or "verify it's you" surprises.
+
+1. Set on the service: `BOT_PROFILE_DIR=/data/jarvis/chrome-profile`,
+   `ENABLE_VNC=1`, `VNC_PASSWORD=<something>`; publish `127.0.0.1:5900:5900`
+   (uncomment it in `docker-compose.yml`, or add it in Dokploy). Redeploy.
+2. From your machine, tunnel VNC over SSH: `ssh -L 5900:127.0.0.1:5900 <server>`.
+3. Open a VNC viewer to `localhost:5900` (enter `VNC_PASSWORD`).
+4. Start the login in the container:
+   `docker exec -it -u pwuser <container> /app/login.sh`
+   A Chrome window appears in the VNC session — log in to the bot account,
+   finish 2FA, then press Enter in the exec terminal to save and exit.
+5. Turn it back off: `ENABLE_VNC=0`, remove the 5900 mapping, redeploy.
+
+The profile lives in the `jarvis-data` volume, so the session persists across
+restarts. Empty/not-logged-in profile behaves like anonymous (still blocked)
+until the login is present.
 
 Bot log confirms the mode: `Persistent authenticated context launched (profile: …)`.
 Sessions expire after weeks/months — re-run the login to refresh.

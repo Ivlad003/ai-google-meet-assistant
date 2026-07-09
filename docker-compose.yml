@@ -25,6 +25,10 @@ services:
       # Google Meet accepts the bot (anonymous automated joins are blocked).
       # Leave empty for anonymous mode. See docs/technical-details.md.
       - BOT_PROFILE_DIR=${BOT_PROFILE_DIR:-}
+      # One-time Google login: set ENABLE_VNC=1 (+ VNC_PASSWORD), publish 5900
+      # to 127.0.0.1 below, tunnel it, run /app/login.sh. Turn off afterwards.
+      - ENABLE_VNC=${ENABLE_VNC:-0}
+      - VNC_PASSWORD=${VNC_PASSWORD:-}
       - AUTH_ENABLED=${AUTH_ENABLED:-false}
       - AUTH_USER=${AUTH_USER:-admin}
       - AUTH_PASSWORD=${AUTH_PASSWORD:-}
@@ -32,6 +36,9 @@ services:
     stop_grace_period: 30s
     ports:
       - "8080:8080"
+      # Uncomment ONLY for the one-time VNC login, then remove. Bound to
+      # localhost so it is reachable only via an SSH tunnel to the host.
+      # - "127.0.0.1:5900:5900"
 
 volumes:
   jarvis-data:

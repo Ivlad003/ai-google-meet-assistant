@@ -59,6 +59,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pulseaudio \
     x11-utils \
     x11-xserver-utils \
+    x11vnc \
     jq \
     && rm -rf /var/lib/apt/lists/*
 
@@ -83,7 +84,9 @@ RUN mkdir -p /data/jarvis/sessions /data/jarvis/logs /app/storage/screenshots /a
 
 # Copy entrypoint and default config
 COPY docker/entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh \
+# One-time Google login helper (used via `docker exec` + VNC; see docs)
+COPY docker/login.sh /app/login.sh
+RUN chmod +x /app/entrypoint.sh /app/login.sh \
     && chown -R pwuser:pwuser /app
 
 COPY jarvis.config.example.json /app/default-config.json
