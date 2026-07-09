@@ -46,6 +46,14 @@ export const googleRejectionIndicators: string[] = [
   'text="This meeting has ended"',
   'text="Invalid meeting"',
   'text="Meeting link expired"',
+
+  // Anonymous join hard-blocked by Google ("You can't join this video call").
+  // Unquoted text= is substring matching — avoids the typographic apostrophe in "can't".
+  'text=join this video call',
+  'text=unless invited or admitted by the host',
+  // Ukrainian
+  'text=приєднатися до цього відеодзвінка',
+  'text=Ви не можете приєднатися',
   
   // Error dialog indicators (more specific to avoid false positives)
   '[role="dialog"]:has-text("Meeting not found")',

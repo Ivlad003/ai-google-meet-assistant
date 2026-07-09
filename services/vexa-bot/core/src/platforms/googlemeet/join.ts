@@ -1,5 +1,5 @@
 import { Page } from "playwright";
-import { log, randomDelay, callJoiningCallback } from "../../utils";
+import { log, randomDelay, callJoiningCallback, screenshotPath } from "../../utils";
 import { BotConfig } from "../../types";
 import { 
   googleNameInputSelectors,
@@ -106,7 +106,7 @@ export async function joinGoogleMeeting(
   await page.bringToFront();
 
   // Take screenshot after navigation
-  try { await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-0-after-navigation.png', fullPage: true }); } catch {}
+  try { await page.screenshot({ path: screenshotPath('bot-checkpoint-0-after-navigation.png'), fullPage: true }); } catch {}
   log("Screenshot: After navigation to meeting URL");
   
   // --- Call joining callback to notify bot-manager that bot is joining ---
@@ -131,11 +131,23 @@ export async function joinGoogleMeeting(
   log("Name input field found.");
   
   // Take screenshot after finding name field
-  try { await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-0-name-field-found.png', fullPage: true }); } catch {}
+  try { await page.screenshot({ path: screenshotPath('bot-checkpoint-0-name-field-found.png'), fullPage: true }); } catch {}
   log("Screenshot: Name input field found");
 
   await page.waitForTimeout(randomDelay(1000));
+
+  // Dismiss the "Sign in with your Google account" tooltip that overlays the
+  // name field on the redesigned pre-join screen (anonymous users only).
+  try {
+    await page.click('button:has-text("Got it")', { timeout: 2000 });
+    log("Dismissed 'Sign in' tooltip.");
+  } catch {
+    log("'Sign in' tooltip not present.");
+  }
+
   await page.fill(nameFieldSelector, botName);
+  const filledName = await page.inputValue(nameFieldSelector).catch(() => "<unreadable>");
+  log(`Name field filled with: "${filledName}"`);
 
   // Mute mic and camera if available
   try {
@@ -175,6 +187,6 @@ export async function joinGoogleMeeting(
   log(`${botName} joined the Google Meet Meeting.`);
   
   // Take screenshot after clicking "Ask to join"
-  try { await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-0-after-ask-to-join.png', fullPage: true }); } catch {}
+  try { await page.screenshot({ path: screenshotPath('bot-checkpoint-0-after-ask-to-join.png'), fullPage: true }); } catch {}
   log("Screenshot: After clicking 'Ask to join'");
 }

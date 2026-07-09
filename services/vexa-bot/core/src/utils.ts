@@ -1,3 +1,5 @@
+import * as fs from "fs";
+import * as path from "path";
 import { callStatusChangeCallback } from "./services/unified-callback";
 
 export function log(message: string): void {
@@ -6,6 +8,16 @@ export function log(message: string): void {
 
 export function randomDelay(amount: number) {
   return (2 * Math.random() - 1) * (amount / 10) + amount;
+}
+
+// /app/storage/screenshots exists only in Docker; native runs must
+// provide SCREENSHOT_DIR or debug screenshots are silently dropped.
+export function screenshotPath(name: string): string {
+  const dir = process.env.SCREENSHOT_DIR || "/app/storage/screenshots";
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch {}
+  return path.join(dir, name);
 }
 
 export async function callStartupCallback(botConfig: any): Promise<void> {
